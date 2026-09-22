@@ -9,13 +9,43 @@ types enforced end to end -- exactly as scoped in the NFH network design notes.
 No dependencies. Python 3.9+ only.
 
 ```
-cd beckn_demo
-python3 run_demo.py
+python3 run_uc1.py     # Vishaal -- UC1 only
+python3 run_uc2.py     # Inchara -- UC2 only
+python3 run_demo.py    # both together, for demoing the shared infra
 ```
 
-Runs UC1 (NGO support) and UC2 (coaching) back to back, using the *same*
-`shared/network.py` -- proving both use cases sit on identical, consistent
-infrastructure, per the meeting notes' explicit ask.
+## Working on this together -- zero-conflict split
+
+|  | Vishaal (UC1) | Inchara (UC2) |
+|---|---|---|
+| **Only file to edit** | `domains/ngo_support.py` | `domains/coaching.py` |
+| **Your entry point** | `run_uc1.py` | `run_uc2.py` |
+| **Never touch** | `shared/`, `run_scenario.py`, the other person's domain file | same |
+
+Because you're each only editing your own file in `domains/`, you can both
+work directly on `main` without branches -- there's no file either of you
+needs to touch that the other one also needs. If `shared/network.py` needs
+a real change (new message type, new node behaviour), that's a
+conversation first, not a solo edit -- it affects both use cases at once.
+
+### Setup (once)
+
+```
+git remote add origin <your-repo-url>
+git push -u origin main
+```
+
+### Day to day (either of you)
+
+```
+git pull                          # pick up the other person's latest domain file
+# edit your own domains/*.py
+python3 run_uc1.py   # or run_uc2.py -- confirm it still runs clean
+git add domains/your_file.py
+git commit -m "..."
+git push
+```
+
 
 ## Structure
 
