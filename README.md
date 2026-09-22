@@ -80,6 +80,35 @@ Only touch `domains/`. Copy `ngo_support.py`, rename it, replace the
   plugins are not reproduced here. This demo proves the *participation
   logic* (discovery-only vs. full-transaction), not production security.
 
+## Live frontend
+
+`frontend/` is a Vite + React + TypeScript + Tailwind app -- a network
+diagram, a real search box, browsable results, and a JSON inspector that
+drives a real backend instead of a canned script. It's wired to
+[real_protocol/](real_protocol/), the genuinely-separate-HTTP-services
+version (see that folder's README), not `api.py`.
+
+```
+pip install -r requirements.txt
+python -m real_protocol.serve   # boots + registers 14 real services, stays up
+
+cd frontend
+npm install
+npm run dev                     # frontend on http://localhost:5173
+```
+
+Open http://localhost:5173, pick UC1 or UC2, and type a real search --
+what's typed becomes the actual search intent sent over HTTP, and only
+providers whose catalog genuinely matches call back. Pick a result to
+select it: a discovery-only provider NACKs for real, a full-transaction
+one walks through select -> init -> confirm, watching each async on_*
+callback land.
+
+`api.py` still exists as the simpler reference implementation -- it wraps
+`shared/network.py`'s in-process classes in real HTTP endpoints, both use
+cases work there, but the frontend no longer points at it. Run it directly
+(`python3 api.py`, port 8000) if you want to poke at that version instead.
+
 ## What this proves, concretely
 
 1. A `discover` reaches every registered node in a domain, regardless of type.
