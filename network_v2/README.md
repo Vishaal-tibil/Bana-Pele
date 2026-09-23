@@ -7,8 +7,7 @@ with the existing prototype. It exists to close specific gaps between
 `A13-Digital-Backbone-Functional-v22Sep2026.pdf`, and to give that closed
 gap a real, driveable UI: a Naledi app and a Provider console, in the
 spirit of the downloaded `BanaPele_UC1_UC2_Prototype` reference, but
-wired to this real multi-service network rather than a single-process
-mock.
+wired to this real network rather than a single-process mock.
 
 Only two files are shared with the rest of the repo, both read-only:
 `domains/ngo_support.py` and `domains/coaching.py` (the same catalog
