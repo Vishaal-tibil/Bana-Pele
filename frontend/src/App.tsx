@@ -10,13 +10,13 @@ const DOMAIN_INFO: Record<Domain, { title: string; blurb: string; queryPlacehold
   "ngo-support": {
     title: "UC1 — NGO Support",
     blurb: "Connect an early-childhood practitioner with support organisations.",
-    queryPlaceholder: "starter kit",
+    queryPlaceholder: "ECD materials",
     regionPlaceholder: "Bushbuckridge",
   },
   coaching: {
     title: "UC2 — Coaching",
     blurb: "Match someone looking for a coach with the right person, e.g. Naledi finding the right Thabo.",
-    queryPlaceholder: "business coaching, Sesotho",
+    queryPlaceholder: "coaching, Sesotho",
     regionPlaceholder: "Bushbuckridge",
   },
 };

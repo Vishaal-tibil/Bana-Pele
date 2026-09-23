@@ -1,42 +1,55 @@
 """
 UC2 domain data -- Naledi Discovers the Right Thabo.
-Mock data for demo purposes. Replace with real coach catalog data when available --
-this file is the only thing that should change; shared/network.py stays untouched.
+
+Every name and category below is drawn from a named source, not invented:
+
+  - "Thabo" is the doc's own generic coach persona -- see
+    A13-Digital-Backbone-Functional-v22Sep2026.pdf section 9.2's title,
+    "Naledi Discovers the Right Thabo", and the coaching narrative
+    throughout. The doc never names an individual coach with a surname,
+    so this file doesn't invent one either -- "Thabo A" / "Thabo B" /
+    "Thabo C" instantiates the same persona three times, the same
+    disambiguation convention the sibling BanaPele_UC1_UC2_Prototype
+    reference (db.py) independently uses for this exact same problem.
+  - Every item's name and `description` attribute is quoted directly
+    from the doc's section 8 "Value exchange domains" table (p.14) --
+    "Coaching and mentoring", "Learning and capacity development" and
+    "Workforce and specialist services". The doc gives no specifics
+    about what any individual Thabo actually offers, so none are
+    invented here.
+
+Still mock/illustrative data for demo purposes -- shared/network.py
+stays untouched; this is the only file that should change for UC2.
 """
 from shared.models import Provider, Item, Intent
 
 def build_providers() -> list[Provider]:
     return [
-        Provider(id="thabo_ndlovu", name="Thabo Ndlovu", participation_type="full_transaction",
+        Provider(id="thabo_a", name="Thabo A", participation_type="full_transaction",
                   items=[
-                      Item(id="business_coaching", name="Business Registration Coaching",
+                      Item(id="coaching_mentoring", name="Coaching and mentoring",
                            attributes={"language": "Sesotho", "region": "Bushbuckridge",
-                                       "availability": "weekdays", "rating_basis": "12 completed engagements"}),
+                                       "availability": "weekdays",
+                                       "description": "Coach discovery, matching, engagement, "
+                                                       "follow-up and contribution records."}),
                   ]),
-        Provider(id="thandiwe_mkhize", name="Thandiwe Mkhize", participation_type="full_transaction",
+        Provider(id="thabo_b", name="Thabo B", participation_type="full_transaction",
                   items=[
-                      Item(id="business_coaching", name="Business Registration Coaching",
+                      Item(id="capacity_development", name="Learning and capacity development",
                            attributes={"language": "isiZulu", "region": "Bushbuckridge",
-                                       "availability": "weekends", "rating_basis": "8 completed engagements"}),
+                                       "availability": "weekends",
+                                       "description": "Courses, coaching, assessments, evidence "
+                                                       "and learning pathways."}),
                   ]),
-        Provider(id="sipho_dlamini", name="Sipho Dlamini", participation_type="full_transaction",
+        Provider(id="thabo_c", name="Thabo C", participation_type="discovery_only",
                   items=[
-                      Item(id="financial_literacy", name="Financial Literacy Coaching",
-                           attributes={"language": "Sesotho", "region": "Mpumalanga (province-wide)",
-                                       "availability": "evenings", "rating_basis": "20 completed engagements"}),
-                  ]),
-        Provider(id="palesa_mokoena", name="Palesa Mokoena", participation_type="full_transaction",
-                  items=[
-                      Item(id="curriculum_support", name="Play-Based Curriculum Support",
-                           attributes={"language": "Sesotho", "region": "Bushbuckridge",
-                                       "availability": "weekdays", "rating_basis": "5 completed engagements"}),
-                  ]),
-        Provider(id="thabo_khumalo", name="Thabo Khumalo", participation_type="discovery_only",
-                  items=[
-                      Item(id="peer_mentoring", name="Peer Mentoring Circle",
-                           attributes={"note": "runs via WhatsApp group -- not yet on network, contact to join"}),
+                      Item(id="workforce_specialist", name="Workforce and specialist services",
+                           attributes={"region": "Mpumalanga (province-wide)",
+                                       "description": "Practitioners, specialists, recruitment "
+                                                       "support and referrals.",
+                                       "note": "not yet on the network -- contact directly"}),
                   ]),
     ]
 
 DOMAIN = "coaching"
-SAMPLE_INTENT = Intent(category="business_coaching", attributes={"language": "Sesotho", "region": "Bushbuckridge"})
+SAMPLE_INTENT = Intent(category="coaching_mentoring", attributes={"region": "Bushbuckridge"})

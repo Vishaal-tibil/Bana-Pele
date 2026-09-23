@@ -38,7 +38,16 @@ PORT = int(os.environ["BPP_PORT"])
 DOMAIN = os.environ.get("BPP_DOMAIN", "ngo-support")
 SELF_URL = f"http://127.0.0.1:{PORT}"
 
-_provider = next(p for p in DOMAIN_MODULES[DOMAIN].build_providers() if p.id == PROVIDER_ID)
+def _all_providers(module):
+    # ngo_support.py now also has build_mediated_providers() (Platform-mediated
+    # participants network_v2's My Journey Adapter serves -- see its docstring).
+    # real_protocol has no adapter concept, so it just treats them as one more
+    # independent provider, same as before that split existed.
+    mediated = getattr(module, "build_mediated_providers", lambda: [])()
+    return module.build_providers() + mediated
+
+
+_provider = next(p for p in _all_providers(DOMAIN_MODULES[DOMAIN]) if p.id == PROVIDER_ID)
 
 app = FastAPI(title=f"BPP:{PROVIDER_ID}")
 

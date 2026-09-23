@@ -90,7 +90,7 @@ version (see that folder's README), not `api.py`.
 
 ```
 pip install -r requirements.txt
-python -m real_protocol.serve   # boots + registers 14 real services, stays up
+python -m real_protocol.serve   # boots + registers 10 real services, stays up
 
 cd frontend
 npm install

@@ -1,6 +1,9 @@
 """
-Boots Registry, Gateway, BAP and six BPPs as six separate OS processes on
-six separate ports, registers them, then drives one full search ->
+Boots Registry, Gateway, BAP and one BPP per provider in
+domains/ngo_support.py (currently 3, including "imbe" -- real_protocol
+has no My Journey Adapter concept, so it just runs Imbe as one more
+independent process, same as the others) as separate OS processes on
+separate ports, registers them, then drives one full search ->
 select -> init -> confirm lifecycle against a real (full_transaction)
 provider and shows a discovery_only provider NACKing select -- over real
 HTTP, exactly the flow shared/network.py's run_uc1.py drives in-process.
@@ -13,13 +16,13 @@ import time
 
 import httpx
 
-from domains.ngo_support import build_providers
+from domains.ngo_support import build_providers, build_mediated_providers
 
 REGISTRY_URL = "http://127.0.0.1:9001"
 GATEWAY_URL = "http://127.0.0.1:9002"
 BAP_URL = "http://127.0.0.1:9003"
 
-PROVIDERS = build_providers()
+PROVIDERS = build_providers() + build_mediated_providers()
 BPP_PORTS = {p.id: 9101 + i for i, p in enumerate(PROVIDERS)}
 
 
@@ -74,8 +77,7 @@ def main():
 
             print("=== search ===")
             r = client.post(f"{BAP_URL}/client/search",
-                             params={"domain": "ngo-support", "category": "starter_kit",
-                                     "region": "Bushbuckridge"})
+                             params={"domain": "ngo-support", "category": "", "region": ""})
             tx_id = r.json()["transaction_id"]
             print(f"tx_id={tx_id}\n")
 
@@ -93,7 +95,7 @@ def main():
 
             print("=== full_transaction happy path: smartstart ===")
             client.post(f"{BAP_URL}/client/select",
-                        params={"tx_id": tx_id, "bpp_id": "smartstart", "item_id": "starter_kit"})
+                        params={"tx_id": tx_id, "bpp_id": "smartstart", "item_id": "ecd_materials"})
             time.sleep(0.5)
             client.post(f"{BAP_URL}/client/init", params={"tx_id": tx_id, "bpp_id": "smartstart"})
             time.sleep(0.5)
@@ -101,10 +103,11 @@ def main():
             time.sleep(0.5)
             print()
 
-            print("=== discovery_only rejection: impande ===")
+            print("=== discovery_only rejection: imbe ===")
             r = client.post(f"{BAP_URL}/client/select",
-                             params={"tx_id": tx_id, "bpp_id": "impande", "item_id": "facility_grant"})
-            print(f"select(impande) -> {r.json()}\n")
+                             params={"tx_id": tx_id, "bpp_id": "imbe",
+                                      "item_id": "registration_compliance"})
+            print(f"select(imbe) -> {r.json()}\n")
 
             print("=== full message trail for this transaction ===")
             log = client.get(f"{BAP_URL}/client/log/{tx_id}").json()

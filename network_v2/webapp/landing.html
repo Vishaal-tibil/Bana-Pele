@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bana Pele Network -- v2</title>
+<style>
+  :root {
+    --accent:#1e6f5c; --accent-dark:#123e33; --accent-soft:#e6f4ee; --accent-line:#bfe2d1;
+    --ink:#171e27; --muted:#5c6773; --muted-soft:#98a2ad;
+    --bg:#eef1f4; --surface:#ffffff; --line:#e2e7eb; --line-soft:#edf1f4;
+    --shadow-sm: 0 1px 2px rgba(20,28,38,.05), 0 1px 1px rgba(20,28,38,.04);
+    --shadow-md: 0 10px 28px -10px rgba(20,28,38,.16);
+    --ease: cubic-bezier(.22,.9,.35,1);
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:
+    radial-gradient(ellipse 900px 500px at 15% -10%, var(--accent-soft) 0%, transparent 60%),
+    var(--bg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 56px 24px; }
+  .kicker { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
+  h1 { font-size: 26px; margin: 0 0 8px; letter-spacing: -.02em; }
+  p.lede { color: var(--muted); font-size: 14.5px; line-height: 1.6; margin: 0 0 30px; max-width: 52ch; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+  @media (max-width: 560px) { .cards { grid-template-columns: 1fr; } }
+  a.card {
+    display: block; border: 1px solid var(--line); border-radius: 16px; padding: 22px;
+    text-decoration: none; color: var(--ink); background: var(--surface);
+    transition: border-color .18s var(--ease), transform .18s var(--ease), box-shadow .18s var(--ease);
+  }
+  a.card:hover { border-color: var(--accent-line); transform: translateY(-3px); box-shadow: var(--shadow-md); }
+  a.card h2 { margin: 0 0 6px; font-size: 16px; letter-spacing: -.01em; }
+  a.card p { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.55; }
+  .note { margin-top: 34px; font-size: 12.5px; color: var(--muted-soft); border-top: 1px solid var(--line); padding-top: 18px; line-height: 1.65; }
+  code { background: var(--line-soft); color: var(--muted); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="kicker">Bana Pele &middot; Network v2</div>
+  <h1>A live, multi-service Beckn-style network</h1>
+  <p class="lede">
+    Two role-based apps, both talking to the same live, multi-service network
+    (Registry, Gateway, a BAP and one real HTTP process per provider).
+    Open both side by side -- one person as Naledi, another as a provider.
+  </p>
+  <a class="card" href="/live" style="display:block;margin-bottom:14px;border-color:var(--accent-line);background:var(--accent-soft);box-shadow:var(--shadow-sm);">
+    <h2>Live split view &rarr;</h2>
+    <p>Both apps on one screen, side by side -- request on the left, accept/decline/fulfil on the right, in real time. The best way to watch a transaction actually happen.</p>
+  </a>
+  <div class="cards">
+    <a class="card" href="/naledi">
+      <h2>Naledi&rsquo;s app &rarr;</h2>
+      <p>Describe a need, see real matching providers, request one, wait for their real response, and confirm once it&rsquo;s done.</p>
+    </a>
+    <a class="card" href="/provider">
+      <h2>Provider console &rarr;</h2>
+      <p>Log in as any registered NGO or coach, accept or decline incoming requests, and mark your own commitments delivered.</p>
+    </a>
+    <a class="card" href="/network">
+      <h2>Network console &rarr;</h2>
+      <p>Proof, not narration: live health checks and catalogs read directly from every node's own port, plus every transaction's raw message trace.</p>
+    </a>
+  </div>
+  <div class="note">
+    This is a separate system from the existing prototype (different ports:
+    <code>9501&ndash;9503</code> and <code>9601</code> onward here, vs.
+    <code>9001&ndash;9003</code> and <code>9101</code> onward there) &mdash;
+    both can run at the same time.
+    Every action here is a real HTTP call between separate processes; nothing shown
+    in either app is invented client-side.
+  </div>
+</div>
+</body>
+</html>

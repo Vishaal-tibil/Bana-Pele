@@ -1,52 +1,69 @@
 """
 UC1 domain data -- Connected NGO Support Network.
-Mock data for demo purposes. Replace with real NGO catalog data when available --
-this file is the only thing that should change; shared/network.py stays untouched.
+
+Every name and category below is drawn from a named source, not invented,
+and now also encodes the doc's two distinct participation pathways
+(section 7 "Participation pathways" / Appendix B2 "Participation
+topology"), not just discovery-only vs full-transaction:
+
+  - "SmartStart" and "Grow" are named directly in
+    A13-Digital-Backbone-Functional-v22Sep2026.pdf as **independent
+    node** examples -- Figure 2's Ecosystem row (p.7), and section 3.5's
+    Network participant row: "SmartStart and Grow are examples" of
+    independent nodes on the Bana Pele ECD Network. Each runs its own
+    real BPP process (see network_v2/serve.py).
+  - "Imbe" is named in that same section 3.5 sentence, but for the
+    *other* pathway: "SmartStart and Grow are examples; **IMBE may
+    instead participate through the Platform**." That's why Imbe is
+    returned from `build_mediated_providers()`, not `build_providers()`
+    -- it's published and answered for by the My Journey Network Adapter
+    (network_v2/journey_adapter.py), not by a dedicated process of its
+    own, matching exactly what the doc says about it.
+  - Every item's name and `description` attribute is quoted directly
+    from the doc's own section 8 "Value exchange domains" table (p.14).
+    The doc gives no specifics about what any of these three actually
+    offer, so none are invented here -- each is given one of the doc's
+    own named categories.
+
+Still mock/illustrative data for demo purposes -- shared/network.py
+stays untouched; this is the only file that should change for UC1.
 """
 from shared.models import Provider, Item, Intent
 
 def build_providers() -> list[Provider]:
+    """Independent nodes -- each runs its own real BPP process."""
     return [
         Provider(id="smartstart", name="SmartStart", participation_type="full_transaction",
                   items=[
-                      Item(id="starter_kit", name="ECD Starter Kit",
-                           attributes={"region": "Bushbuckridge", "capacity": 5,
-                                       "eligibility": "registered ELP"}),
-                      Item(id="toy_library", name="Toy Library Loan Box",
-                           attributes={"region": "Bushbuckridge", "capacity": 12,
-                                       "eligibility": "any practitioner"}),
-                  ]),
-        Provider(id="grow", name="GROW", participation_type="full_transaction",
-                  items=[
-                      Item(id="nutrition_pack", name="Nutrition Support Pack",
-                           attributes={"region": "Bushbuckridge", "capacity": 8,
-                                       "eligibility": "means-tested"}),
-                  ]),
-        Provider(id="playsa", name="PlaySA", participation_type="full_transaction",
-                  items=[
-                      Item(id="play_training", name="Play-Based Learning Workshop",
-                           attributes={"region": "Mpumalanga (province-wide)", "capacity": 20,
-                                       "duration": "2-day workshop"}),
-                  ]),
-        Provider(id="njm_foundation", name="NJM Foundation", participation_type="full_transaction",
-                  items=[
-                      Item(id="wash_kit", name="WASH Facility Upgrade Kit",
-                           attributes={"region": "Bushbuckridge", "capacity": 3,
-                                       "eligibility": "site inspection required"}),
-                  ]),
-        Provider(id="impande", name="Impande", participation_type="discovery_only",
-                  items=[
-                      Item(id="facility_grant", name="Facility Improvement Grant",
+                      Item(id="ecd_materials", name="ECD materials and resources",
                            attributes={"region": "Bushbuckridge",
-                                       "note": "apply directly via impande.org.za -- not yet on network"}),
+                                       "description": "Learning materials, equipment, food-support "
+                                                       "resources and distribution."}),
                   ]),
-        Provider(id="ilifa", name="Ilifa Labantwana", participation_type="discovery_only",
+        Provider(id="grow", name="Grow", participation_type="full_transaction",
                   items=[
-                      Item(id="advocacy_referral", name="Policy & Advocacy Referral",
-                           attributes={"region": "national",
-                                       "note": "referral only -- contact via provincial office"}),
+                      Item(id="capacity_development", name="Learning and capacity development",
+                           attributes={"region": "Bushbuckridge",
+                                       "description": "Courses, coaching, assessments, evidence "
+                                                       "and learning pathways."}),
+                  ]),
+    ]
+
+def build_mediated_providers() -> list[Provider]:
+    """Platform-mediated participants -- published and answered on their
+    behalf by the My Journey Network Adapter, not by a process of their
+    own. See the module docstring for exactly where the doc names Imbe
+    for this pathway."""
+    return [
+        Provider(id="imbe", name="Imbe", participation_type="discovery_only",
+                  items=[
+                      Item(id="registration_compliance", name="Registration and compliance",
+                           attributes={"region": "Bushbuckridge",
+                                       "description": "Requirements, application support, "
+                                                       "inspections and verified status.",
+                                       "note": "published via My Journey -- contact directly to proceed"}),
                   ]),
     ]
 
 DOMAIN = "ngo-support"
-SAMPLE_INTENT = Intent(category="starter_kit", attributes={"region": "Bushbuckridge"})
+SAMPLE_INTENT = Intent(category="ecd_materials", attributes={"region": "Bushbuckridge"})

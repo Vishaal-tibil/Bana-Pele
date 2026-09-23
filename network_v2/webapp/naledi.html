@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My Journey</title>
+<style>
+  :root {
+    --accent:#1e6f5c; --accent-dark:#123e33; --accent-soft:#e6f4ee; --accent-line:#bfe2d1;
+    --ink:#171e27; --muted:#5c6773; --muted-soft:#98a2ad;
+    --bg:#eef1f4; --surface:#ffffff; --line:#e2e7eb; --line-soft:#edf1f4;
+    --warn:#ab431c; --warn-soft:#fbe9e1; --warn-line:#f2c9b3;
+    --radius-lg:16px; --radius-md:12px; --radius-sm:8px;
+    --shadow-sm: 0 1px 2px rgba(20,28,38,.05), 0 1px 1px rgba(20,28,38,.04);
+    --shadow-md: 0 6px 20px -6px rgba(20,28,38,.16);
+    --shadow-lg: 0 20px 45px -12px rgba(20,28,38,.22);
+    --ease: cubic-bezier(.22,.9,.35,1);
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background: var(--bg); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
+  .phone { max-width: 460px; margin: 0 auto; min-height: 100vh; background: var(--surface); display: flex; flex-direction: column; box-shadow: var(--shadow-lg); }
+  header { background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 130%); color: white; padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; }
+  header .brand { font-weight: 700; font-size: 15px; letter-spacing: -.01em; }
+  header a { color: rgba(255,255,255,0.82); font-size: 12px; text-decoration: none; transition: color .15s var(--ease); }
+  header a:hover { color: white; }
+
+  .progress { display:flex; align-items:center; gap: 4px; padding: 12px 20px 0; }
+  .progress .seg { flex:1; height: 3px; border-radius: 3px; background: var(--line); overflow:hidden; }
+  .progress .seg .fill { height:100%; width:0%; background: var(--accent); border-radius: 3px; transition: width .35s var(--ease); }
+  .progress .seg.done .fill { width: 100%; }
+  .progress .seg.current .fill { width: 55%; }
+  .progress-label { padding: 6px 20px 0; font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted-soft); }
+
+  main { flex: 1; padding: 22px 20px 24px; }
+  .screen { animation: fade .28s var(--ease); }
+  @keyframes fade { from { opacity:0; transform: translateY(6px);} to {opacity:1; transform:none;} }
+
+  h1.title { font-size: 20px; margin: 0 0 6px; letter-spacing: -.015em; }
+  p.lede { color: var(--muted); font-size: 13.5px; margin: 0 0 20px; line-height: 1.55; }
+
+  label.field { display:block; font-size:11.5px; font-weight:600; color:var(--muted); margin-bottom:5px; margin-top: 14px; letter-spacing: .01em; }
+  label.field:first-child { margin-top: 0; }
+  input, textarea {
+    width: 100%; padding: 11px 13px; border: 1.5px solid var(--line); border-radius: var(--radius-sm);
+    font-size: 15px; font-family: inherit; background: var(--surface); color: var(--ink);
+    transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
+  }
+  input::placeholder { color: var(--muted-soft); }
+  input:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .domain-row { display:flex; gap: 8px; margin-top: 6px; }
+  .domain-btn { flex:1; padding: 11px; border-radius: var(--radius-sm); border: 1.5px solid var(--line); background: var(--surface); font-size: 13px; font-weight: 600; cursor: pointer; color: var(--muted); transition: all .15s var(--ease); }
+  .domain-btn:hover { border-color: var(--accent-line); color: var(--accent-dark); }
+  .domain-btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); box-shadow: var(--shadow-sm); }
+
+  button.primary {
+    width: 100%; background: var(--accent); color: white; border: none; padding: 14px; border-radius: var(--radius-sm);
+    font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 18px; letter-spacing: -.005em;
+    box-shadow: 0 2px 10px -2px rgba(30,111,92,.45); transition: all .15s var(--ease);
+  }
+  button.primary:hover:not(:disabled) { background: var(--accent-dark); box-shadow: 0 4px 16px -2px rgba(30,111,92,.55); transform: translateY(-1px); }
+  button.primary:active:not(:disabled) { transform: translateY(0); }
+  button.primary:disabled { background: #c2c9cf; cursor: not-allowed; box-shadow: none; }
+  button.link { background: none; border: none; color: var(--accent); font-size: 13px; font-weight: 600; cursor: pointer; padding: 6px 0; transition: color .15s var(--ease); }
+  button.link:hover { color: var(--accent-dark); text-decoration: underline; }
+
+  .card { border: 1px solid var(--line); border-radius: var(--radius-md); padding: 16px; margin-bottom: 12px; background: var(--surface); transition: box-shadow .18s var(--ease), border-color .18s var(--ease); }
+  .card:hover { box-shadow: var(--shadow-sm); }
+  .card.dashed { border-style: dashed; border-color: var(--warn-line); background: var(--warn-soft); }
+  .card h3 { margin: 0 0 3px; font-size: 15px; letter-spacing: -.01em; }
+  .card p.meta { margin: 0; font-size: 12px; color: var(--muted); }
+  .card p.reason { margin: 6px 0 0; font-size: 12px; color: var(--accent-dark); font-style: italic; }
+  .tag { display:inline-block; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px; background: var(--line-soft); color: var(--muted); margin-left: 6px; letter-spacing: .01em; }
+  .tag.discovery { background: var(--warn-soft); color: var(--warn); }
+  button.choose { margin-top: 12px; width: 100%; background: var(--surface); border: 1.5px solid var(--accent); color: var(--accent); padding: 9px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13px; cursor: pointer; transition: all .15s var(--ease); }
+  button.choose:hover { background: var(--accent); color: white; box-shadow: 0 2px 10px -2px rgba(30,111,92,.4); }
+
+  .spinner-wrap { display:flex; flex-direction:column; align-items:center; justify-content:center; padding: 56px 10px; text-align:center; }
+  .spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent); animation: spin .85s linear infinite; margin-bottom: 18px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner-wrap p { color: var(--muted); font-size: 13.5px; margin: 0; font-weight: 500; }
+  .spinner-wrap p.sub { color: var(--muted-soft); font-size: 11.5px; margin-top: 4px; font-weight: 400; }
+
+  .status-card { border-radius: var(--radius-lg); padding: 26px 20px; text-align:center; box-shadow: var(--shadow-sm); }
+  .status-card.ok { background: var(--accent-soft); }
+  .status-card.warn { background: var(--warn-soft); }
+  .status-icon { width: 46px; height: 46px; border-radius: 50%; display:flex; align-items:center; justify-content:center; margin: 0 auto 12px; }
+  .status-icon.ok { background: var(--accent); }
+  .status-icon.warn { background: var(--warn); }
+  .status-card h2 { margin: 0 0 6px; font-size: 17px; letter-spacing: -.01em; }
+  .status-card p { margin: 0; color: var(--muted); font-size: 13px; line-height:1.55; }
+
+  .receipt { margin-top: 18px; border: 1px dashed var(--line); border-radius: var(--radius-md); padding: 14px 16px; font-size: 12.5px; color: var(--muted); background: var(--line-soft); }
+  .receipt div { display:flex; justify-content: space-between; padding: 3px 0; }
+  .receipt div span:last-child { color: var(--ink); font-weight: 600; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+
+  .consent-scope { display:flex; align-items:center; gap:8px; padding: 9px 0; font-size: 13px; }
+  .consent-scope.toggle { align-items:flex-start; cursor: pointer; }
+  .consent-scope.toggle input { width: auto; margin-top: 3px; accent-color: var(--accent); cursor: pointer; }
+  .consent-scope + .consent-scope { border-top: 1px solid var(--line-soft); }
+  .consent-scope.required { color: var(--muted); }
+  .consent-scope.required .lock-icon { display:flex; color: var(--muted-soft); flex-shrink:0; }
+  .consent-scope.required .required-tag { margin-left: auto; font-size: 10px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--muted-soft); background: var(--line-soft); padding: 2px 7px; border-radius: 20px; }
+
+  details.trace { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 12px; }
+  details.trace summary { cursor: pointer; font-size: 11px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; list-style: none; }
+  details.trace summary::-webkit-details-marker { display: none; }
+  details.trace summary::before { content: "▸ "; color: var(--muted-soft); }
+  details.trace[open] summary::before { content: "▾ "; }
+  .trace-entry { margin-top: 8px; border-left: 2px solid var(--accent-line); padding-left: 9px; }
+  .trace-entry .label { font-size: 10px; text-transform: uppercase; color: var(--muted); letter-spacing: .02em; font-weight: 600; }
+  .trace-entry pre { margin: 3px 0 0; font-size: 10.5px; background: var(--line-soft); padding: 7px 9px; border-radius: 7px; overflow-x: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+</style>
+</head>
+<body>
+<div class="phone">
+  <header>
+    <span class="brand">My Journey</span>
+    <a href="/">Switch app</a>
+  </header>
+  <div id="progress-wrap"></div>
+  <main id="main"></main>
+</div>
+
+<script>
+const DOMAINS = {
+  "ngo-support": { title: "NGO support", queryPh: "ECD materials", regionPh: "Bushbuckridge" },
+  "coaching": { title: "Find a coach", queryPh: "coaching, Sesotho", regionPh: "Bushbuckridge" },
+};
+
+let state = {
+  screen: "login", name: "", domain: "ngo-support", query: "", region: "",
+  txId: null, results: [], chosen: null, consentRef: null, order: null, trace: [],
+  error: null,
+};
+
+async function call(method, path, opts = {}) {
+  const url = new URL(path, location.origin);
+  if (opts.params) Object.entries(opts.params).forEach(([k, v]) => url.searchParams.set(k, v));
+  const init = { method, headers: {} };
+  if (opts.body) { init.headers["Content-Type"] = "application/json"; init.body = JSON.stringify(opts.body); }
+  const res = await fetch(url, init);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail || res.statusText);
+  return body;
+}
+
+async function refreshTrace() {
+  if (!state.txId) return;
+  try { state.trace = await call("GET", `/client/log/${state.txId}`); } catch (e) {}
+}
+
+function goto(screen, patch = {}) {
+  state = { ...state, screen, ...patch };
+  render();
+}
+
+// ---- actions ----
+
+async function doSearch() {
+  goto("searching");
+  const res = await call("POST", "/client/search", { params: {
+    domain: state.domain, category: state.query, region: state.region, participant_name: state.name,
+  }});
+  state.txId = res.transaction_id;
+  await refreshTrace();
+
+  // settle-based polling: stop once results stop growing (real Beckn has no
+  // "that's everyone" signal -- a non-matching provider just never answers)
+  let last = [], lastChangeAt = Date.now(), start = Date.now();
+  for (;;) {
+    const r = await call("GET", `/client/results/${state.txId}`).catch(() => []);
+    if (r.length !== last.length) { last = r; lastChangeAt = Date.now(); }
+    await refreshTrace();
+    const elapsed = Date.now() - start;
+    if (elapsed > 6000 || (elapsed > 500 && Date.now() - lastChangeAt > 900)) break;
+    await new Promise(res => setTimeout(res, 250));
+  }
+  goto("results", { results: last });
+}
+
+async function doConsentThenSelect(result, item) {
+  state.chosen = { result, item };
+  goto("consent");
+}
+
+async function grantConsentAndSelect(scope) {
+  const grant = await call("POST", "/client/consent", { body: {
+    participant_name: state.name, purpose: `Requesting: ${state.chosen.item.descriptor.name}`,
+    scope, provider_id: state.chosen.result.bpp_id,
+  }});
+  state.consentRef = grant.consent_ref;
+  await refreshTrace();
+
+  try {
+    const res = await call("POST", "/client/select", { params: {
+      tx_id: state.txId, bpp_id: state.chosen.result.bpp_id, item_id: state.chosen.item.id,
+      consent_ref: state.consentRef,
+    }});
+    await refreshTrace();
+    if (res.status === "NACK") {
+      goto("network-declined", { error: res.error });
+      return;
+    }
+  } catch (e) { goto("results", { error: e.message }); return; }
+
+  goto("pending");
+  pollOrder();
+}
+
+async function pollOrder() {
+  for (;;) {
+    const { order } = await call("GET", `/client/order/${state.txId}`).catch(() => ({ order: null }));
+    await refreshTrace();
+    if (order && order.status === "DECLINED") { goto("declined", { order }); return; }
+    if (order && order.status === "QUOTED") { goto("quoted", { order }); return; }
+    if (order && order.status === "INITIATED") { goto("initiated", { order }); return; }
+    if (order && order.status === "RESERVED") { goto("reserved", { order }); pollFulfilment(); return; }
+    if (order && order.status === "FULFILLED") { goto("ask-verify", { order }); return; }
+    if (order && order.status === "VERIFIED") { goto("receipt", { order }); return; }
+    await new Promise(r => setTimeout(r, 700));
+  }
+}
+
+async function pollFulfilment() {
+  for (;;) {
+    await new Promise(r => setTimeout(r, 1500));
+    const { order } = await call("GET", `/client/order/${state.txId}`).catch(() => ({ order: null }));
+    await refreshTrace();
+    if (order && order.status === "FULFILLED") { goto("ask-verify", { order }); return; }
+    if (state.screen !== "reserved") return; // user navigated away
+  }
+}
+
+async function doInit() {
+  goto("acting", { actingLabel: "Confirming details…" });
+  await call("POST", "/client/init", { params: { tx_id: state.txId, bpp_id: state.chosen.result.bpp_id } });
+  await refreshTrace();
+  pollOrder();
+}
+
+async function doConfirm() {
+  goto("acting", { actingLabel: "Finalizing booking…" });
+  await call("POST", "/client/confirm", { params: { tx_id: state.txId, bpp_id: state.chosen.result.bpp_id } });
+  await refreshTrace();
+  pollOrder();
+}
+
+async function doVerify() {
+  goto("acting", { actingLabel: "Confirming with the network…" });
+  const res = await call("POST", "/client/verify", { params: { tx_id: state.txId, bpp_id: state.chosen.result.bpp_id } });
+  await refreshTrace();
+  goto("receipt", { order: res.order });
+}
+
+function resetAll() {
+  state = { screen: "start", name: state.name, domain: state.domain, query: "", region: "",
+            txId: null, results: [], chosen: null, consentRef: null, order: null, trace: [], error: null };
+  render();
+}
+
+// ---- rendering ----
+
+function el(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstChild; }
+
+function traceHtml() {
+  if (!state.trace.length) return "";
+  return `<details class="trace"><summary>Network trace (${state.trace.length})</summary>
+    ${state.trace.map(e => `<div class="trace-entry"><div class="label">${e.direction} · ${e.note}</div><pre>${escapeHtml(JSON.stringify(e.payload, null, 2))}</pre></div>`).join("")}
+  </details>`;
+}
+function escapeHtml(s) { return s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+
+const STAGES = ["Search", "Results", "Request", "Book", "Done"];
+const STAGE_FOR_SCREEN = {
+  start: 0, searching: 0,
+  results: 1,
+  consent: 2, pending: 2, "network-declined": 2, declined: 2, quoted: 2, acting: 2, initiated: 2,
+  reserved: 3, "ask-verify": 3,
+  receipt: 4,
+};
+
+function renderProgress() {
+  const wrap = document.getElementById("progress-wrap");
+  const stage = STAGE_FOR_SCREEN[state.screen];
+  if (stage === undefined) { wrap.innerHTML = ""; return; }
+  wrap.innerHTML = `
+    <div class="progress">
+      ${STAGES.map((_, i) => `<div class="seg ${i < stage ? "done" : i === stage ? "current" : ""}"><div class="fill"></div></div>`).join("")}
+    </div>
+    <div class="progress-label">${STAGES[stage]}</div>
+  `;
+}
+
+const ICON_CHECK = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const ICON_WARN = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 9v4M12 17h.01M10.29 3.86l-8.18 14.18A1 1 0 0 0 3 19.5h18a1 1 0 0 0 .89-1.46L13.71 3.86a1 1 0 0 0-1.72 0z" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const ICON_LOCK = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none"><rect x="4" y="11" width="16" height="10" rx="2" stroke="currentColor" stroke-width="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+
+function render() {
+  const main = document.getElementById("main");
+  renderProgress();
+  let html = "";
+
+  if (state.screen === "login") {
+    html = `
+      <div class="screen">
+        <h1 class="title">Log in to My Journey</h1>
+        <p class="lede">There's no real account system here -- this name is just attached to what you search and request, so providers and the trace panel can show who's asking. Nothing is authenticated.</p>
+        <label class="field">Your name</label>
+        <input id="f-login-name" placeholder="e.g. Naledi" value="${state.name}">
+        <button class="primary" id="f-login">Continue</button>
+      </div>`;
+    main.innerHTML = html;
+    const submit = () => {
+      const name = document.getElementById("f-login-name").value.trim() || "Naledi";
+      goto("start", { name });
+    };
+    document.getElementById("f-login").onclick = submit;
+    document.getElementById("f-login-name").addEventListener("keydown", e => { if (e.key === "Enter") submit(); });
+    document.getElementById("f-login-name").focus();
+    return;
+  }
+
+  if (state.screen === "start") {
+    html = `
+      <div class="screen">
+        <p style="font-size:12px;color:var(--muted);margin:0 0 14px;">Logged in as <b>${state.name}</b> &middot; <a href="#" id="f-logout" style="color:var(--accent);">log out</a></p>
+        <h1 class="title">What do you need?</h1>
+        <p class="lede">Describe it in your own words -- this goes out as a real search across the network.</p>
+        <label class="field">Looking for</label>
+        <div class="domain-row">
+          ${Object.entries(DOMAINS).map(([k, v]) => `<button class="domain-btn ${state.domain === k ? "active" : ""}" data-domain="${k}">${v.title}</button>`).join("")}
+        </div>
+        <label class="field">Describe it (or leave blank to browse everything)</label>
+        <input id="f-query" placeholder='e.g. "${DOMAINS[state.domain].queryPh}"' value="${state.query}">
+        <label class="field">Where?</label>
+        <input id="f-region" placeholder='e.g. "${DOMAINS[state.domain].regionPh}"' value="${state.region}">
+        <button class="primary" id="f-search">Search the network</button>
+        ${state.error ? `<p style="color:var(--warn);font-size:12.5px;margin-top:10px;">${state.error}</p>` : ""}
+      </div>`;
+    main.innerHTML = html;
+    main.querySelectorAll(".domain-btn").forEach(b => b.onclick = () => { state.domain = b.dataset.domain; render(); });
+    document.getElementById("f-logout").onclick = (e) => { e.preventDefault(); goto("login", { name: "" }); };
+    document.getElementById("f-search").onclick = () => {
+      state.query = document.getElementById("f-query").value;
+      state.region = document.getElementById("f-region").value;
+      doSearch();
+    };
+    return;
+  }
+
+  if (state.screen === "searching") {
+    main.innerHTML = `<div class="spinner-wrap"><div class="spinner"></div><p>Asking the network…</p><p style="font-size:11.5px;margin-top:6px;">Broadcasting to every registered provider</p></div>`;
+    return;
+  }
+
+  if (state.screen === "results") {
+    html = `<div class="screen">
+      <h1 class="title">${state.results.length ? state.results.length + " provider(s) answered" : "No matches"}</h1>
+      <p class="lede">${state.results.length ? "Only providers whose catalog genuinely matched replied." : "Try a broader search."}</p>
+      ${state.results.map(r => r.provider.items.map(item => `
+        <div class="card ${r.provider.participation_type === "discovery_only" ? "dashed" : ""}">
+          <h3>${r.provider.descriptor.name} <span class="tag ${r.provider.participation_type === "discovery_only" ? "discovery" : ""}">${r.provider.participation_type === "discovery_only" ? "discovery only" : "can book"}</span></h3>
+          <p class="meta">${item.descriptor.name}</p>
+          ${item.match_reason ? `<p class="reason">${item.match_reason}</p>` : ""}
+          <button class="choose" data-bpp="${r.bpp_id}" data-item="${item.id}">Request this</button>
+        </div>`).join("")).join("")}
+      <button class="link" id="f-back">&larr; New search</button>
+      ${state.error ? `<p style="color:var(--warn);font-size:12.5px;">${state.error}</p>` : ""}
+      ${traceHtml()}
+    </div>`;
+    main.innerHTML = html;
+    document.getElementById("f-back").onclick = resetAll;
+    main.querySelectorAll(".choose").forEach(b => b.onclick = () => {
+      const r = state.results.find(x => x.bpp_id === b.dataset.bpp);
+      const item = r.provider.items.find(i => i.id === b.dataset.item);
+      doConsentThenSelect(r, item);
+    });
+    return;
+  }
+
+  if (state.screen === "consent") {
+    const { result, item } = state.chosen;
+    html = `<div class="screen">
+      <h1 class="title">Share your details?</h1>
+      <p class="lede">Before we send this request to <b>${result.provider.descriptor.name}</b>, confirm what you're happy to share.</p>
+      <div class="card">
+        <div class="consent-scope required">
+          <span class="lock-icon">${ICON_LOCK}</span>
+          <span>Your name (${state.name})</span>
+          <span class="required-tag">always included</span>
+        </div>
+        <label class="consent-scope toggle"><input type="checkbox" id="scope-search" checked> What you searched for</label>
+      </div>
+      <p style="font-size:11px;color:var(--muted-soft);margin:-6px 0 0;line-height:1.5;">Your name always travels with a request -- that's how a provider knows who's asking. There's no way to make it optional in this build, so it isn't shown as a choice.</p>
+      <button class="primary" id="f-consent">Agree &amp; send request</button>
+      <button class="link" id="f-back">&larr; Back to results</button>
+    </div>`;
+    main.innerHTML = html;
+    document.getElementById("f-back").onclick = () => goto("results");
+    document.getElementById("f-consent").onclick = () => {
+      const scope = ["name"];
+      if (document.getElementById("scope-search").checked) scope.push("search_details");
+      grantConsentAndSelect(scope);
+    };
+    return;
+  }
+
+  if (state.screen === "pending" || state.screen === "acting") {
+    main.innerHTML = `<div class="spinner-wrap"><div class="spinner"></div><p>${state.actingLabel || "Waiting for the provider to respond…"}</p></div>`;
+    return;
+  }
+
+  if (state.screen === "network-declined") {
+    main.innerHTML = `<div class="screen">
+      <div class="status-card warn"><div class="status-icon warn">${ICON_WARN}</div><h2>Can't book this one</h2><p>${state.error.message}</p></div>
+      <button class="primary" id="f-back">Back to results</button>
+      ${traceHtml()}
+    </div>`;
+    document.getElementById("f-back").onclick = () => goto("results");
+    return;
+  }
+
+  if (state.screen === "declined") {
+    main.innerHTML = `<div class="screen">
+      <div class="status-card warn"><div class="status-icon warn">${ICON_WARN}</div><h2>${state.chosen.result.provider.descriptor.name} declined</h2><p>${state.order.decline_reason || "Not available right now."}</p></div>
+      <button class="primary" id="f-back">Back to results</button>
+      ${traceHtml()}
+    </div>`;
+    document.getElementById("f-back").onclick = () => goto("results");
+    return;
+  }
+
+  if (state.screen === "quoted") {
+    html = `<div class="screen">
+      <h1 class="title">${state.chosen.result.provider.descriptor.name} accepted</h1>
+      <p class="lede">Here's what they've offered:</p>
+      <div class="card">${Object.entries(state.order.quote || {}).map(([k, v]) => `<p class="meta"><b>${k.replace(/_/g, " ")}:</b> ${v}</p>`).join("")}</div>
+      <button class="primary" id="f-init">Confirm details</button>
+      ${traceHtml()}
+    </div>`;
+    main.innerHTML = html;
+    document.getElementById("f-init").onclick = doInit;
+    return;
+  }
+
+  if (state.screen === "initiated") {
+    html = `<div class="screen">
+      <h1 class="title">Terms set</h1>
+      <p class="lede">Ready to finalize with ${state.chosen.result.provider.descriptor.name}.</p>
+      <button class="primary" id="f-confirm">Finalize booking</button>
+      ${traceHtml()}
+    </div>`;
+    main.innerHTML = html;
+    document.getElementById("f-confirm").onclick = doConfirm;
+    return;
+  }
+
+  if (state.screen === "reserved") {
+    main.innerHTML = `<div class="screen">
+      <div class="status-card ok"><div class="status-icon ok">${ICON_CHECK}</div><h2>Booked</h2><p>Order <b>${state.order.id}</b> is reserved with ${state.chosen.result.provider.descriptor.name}. Waiting for them to deliver it.</p></div>
+      <div class="spinner-wrap"><div class="spinner"></div></div>
+      ${traceHtml()}
+    </div>`;
+    return;
+  }
+
+  if (state.screen === "ask-verify") {
+    main.innerHTML = `<div class="screen">
+      <div class="status-card ok"><div class="status-icon ok">${ICON_CHECK}</div><h2>Marked delivered</h2><p>${state.chosen.result.provider.descriptor.name} says this support has been provided. Did it happen?</p></div>
+      <button class="primary" id="f-verify">Yes, confirm it happened</button>
+      ${traceHtml()}
+    </div>`;
+    document.getElementById("f-verify").onclick = doVerify;
+    return;
+  }
+
+  if (state.screen === "receipt") {
+    main.innerHTML = `<div class="screen">
+      <div class="status-card ok"><div class="status-icon ok">${ICON_CHECK}</div><h2>All done</h2><p>Verified and recorded.</p></div>
+      <div class="receipt">
+        <div><span>Order</span><span>${state.order.id}</span></div>
+        <div><span>Provider</span><span>${state.chosen.result.provider.descriptor.name}</span></div>
+        <div><span>Status</span><span>${state.order.status}</span></div>
+      </div>
+      <button class="primary" id="f-restart">Start a new search</button>
+      ${traceHtml()}
+    </div>`;
+    document.getElementById("f-restart").onclick = resetAll;
+    return;
+  }
+}
+
+render();
+</script>
+</body>
+</html>

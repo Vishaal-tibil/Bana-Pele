@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Transaction -- Bana Pele Network v2</title>
+<style>
+  :root {
+    --accent:#1e6f5c; --ink:#171e27; --muted:#5c6773; --bg:#eef1f4; --line:#e2e7eb;
+    --warn:#ab431c; --ease: cubic-bezier(.22,.9,.35,1);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background: var(--bg); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
+  body { display:flex; flex-direction:column; }
+
+  header { background: linear-gradient(135deg, var(--ink) 0%, #0a0f16 130%); color: white; padding: 12px 20px; display:flex; align-items:center; justify-content:space-between; flex-wrap: wrap; gap: 8px; }
+  header .brand { font-weight: 700; font-size: 14.5px; letter-spacing: -.01em; }
+  header .brand small { display:block; font-weight: 400; font-size: 11.5px; color: rgba(255,255,255,0.6); margin-top: 3px; }
+  header a { color: rgba(255,255,255,0.82); font-size: 12px; text-decoration: none; transition: color .15s var(--ease); }
+  header a:hover { color: white; }
+
+  .split { flex: 1; display: flex; min-height: 0; }
+  .pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .pane + .pane { border-left: 3px solid var(--ink); }
+  .pane-label { padding: 9px 16px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); background: white; border-bottom: 1px solid var(--line); display:flex; align-items:center; gap: 8px; }
+  .pane-label .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse-dot 2.2s ease-in-out infinite; }
+  @keyframes pulse-dot { 0%, 100% { box-shadow: 0 0 0 0 rgba(30,111,92,.35); } 50% { box-shadow: 0 0 0 4px rgba(30,111,92,0); } }
+  .pane-label.provider .dot { background: var(--warn); animation-name: pulse-dot-warn; }
+  @keyframes pulse-dot-warn { 0%, 100% { box-shadow: 0 0 0 0 rgba(171,67,28,.35); } 50% { box-shadow: 0 0 0 4px rgba(171,67,28,0); } }
+  .pane iframe { flex: 1; border: none; width: 100%; height: 100%; background: white; }
+
+  .reload-btn { background: none; border: 1px solid rgba(255,255,255,0.3); color: white; font-size: 11px; padding: 5px 11px; border-radius: 6px; cursor: pointer; transition: all .15s var(--ease); }
+  .reload-btn:hover { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.5); }
+
+  @media (max-width: 800px) {
+    .split { flex-direction: column; }
+    .pane + .pane { border-left: none; border-top: 3px solid var(--ink); }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Bana Pele Network -- v2 <small>Two independent processes, visible at the same time -- nothing here is faked or synced client-side</small></div>
+  <div style="display:flex;gap:14px;align-items:center;">
+    <button class="reload-btn" id="reload-both">Reset both</button>
+    <a href="/network" target="_blank">Network console &#8599;</a>
+    <a href="/">&larr; Landing</a>
+  </div>
+</header>
+<div class="split">
+  <div class="pane">
+    <div class="pane-label"><span class="dot"></span> Naledi -- requests support</div>
+    <iframe id="frame-naledi" src="/naledi"></iframe>
+  </div>
+  <div class="pane">
+    <div class="pane-label provider"><span class="dot"></span> Provider -- accepts / declines / fulfils</div>
+    <iframe id="frame-provider" src="/provider"></iframe>
+  </div>
+</div>
+<script>
+document.getElementById("reload-both").onclick = () => {
+  document.getElementById("frame-naledi").src = "/naledi";
+  document.getElementById("frame-provider").src = "/provider";
+};
+</script>
+</body>
+</html>

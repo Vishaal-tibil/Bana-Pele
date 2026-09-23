@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Network Console</title>
+<style>
+  :root {
+    --accent:#1e6f5c; --accent-dark:#123e33; --accent-soft:#e6f4ee; --accent-line:#bfe2d1;
+    --ink:#171e27; --muted:#5c6773; --muted-soft:#98a2ad;
+    --bg:#eef1f4; --surface:#ffffff; --line:#e2e7eb; --line-soft:#edf1f4;
+    --warn:#ab431c; --warn-soft:#fbe9e1; --warn-line:#f2c9b3;
+    --purple:#9333ea; --purple-soft:#f5edfe; --purple-line:#e4d0fb;
+    --radius-lg:16px; --radius-md:12px; --radius-sm:8px;
+    --shadow-sm: 0 1px 2px rgba(20,28,38,.05), 0 1px 1px rgba(20,28,38,.04);
+    --shadow-md: 0 8px 24px -8px rgba(20,28,38,.14);
+    --ease: cubic-bezier(.22,.9,.35,1);
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background: var(--bg); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
+  header { background: linear-gradient(135deg, var(--ink) 0%, #0a0f16 130%); color: white; padding: 15px 24px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; }
+  header .brand { font-weight: 700; font-size: 15px; letter-spacing: -.01em; }
+  header .brand small { display:block; font-weight: 400; font-size: 11.5px; color: rgba(255,255,255,0.6); margin-top: 3px; }
+  header a { color: rgba(255,255,255,0.82); font-size: 12px; text-decoration: none; transition: color .15s var(--ease); }
+  header a:hover { color: white; }
+
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }
+  section { margin-bottom: 32px; }
+  h2 { font-size: 13.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 4px; font-weight: 700; }
+  p.sub { font-size: 12.5px; color: var(--muted-soft); margin: 0 0 16px; line-height: 1.55; }
+
+  .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+  .node { border: 1px solid var(--line); border-radius: var(--radius-md); padding: 14px 16px; background: var(--surface); transition: box-shadow .18s var(--ease), border-color .18s var(--ease), transform .18s var(--ease); }
+  .node:hover { box-shadow: var(--shadow-md); border-color: var(--accent-line); transform: translateY(-1px); }
+  .node .top { display:flex; align-items:center; justify-content:space-between; margin-bottom: 4px; }
+  .node h3 { margin:0; font-size: 14px; letter-spacing: -.01em; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #c6cbd0; flex-shrink:0; }
+  .dot.up { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); animation: pulse-dot 2.2s ease-in-out infinite; }
+  .dot.down { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+  @keyframes pulse-dot { 0%, 100% { box-shadow: 0 0 0 3px var(--accent-soft); } 50% { box-shadow: 0 0 0 5px var(--accent-soft); } }
+  .node .meta { font-size: 11.5px; color: var(--muted); }
+  .node .port { font-family: ui-monospace, Menlo, monospace; font-size: 11px; background: var(--line-soft); padding: 1px 6px; border-radius: 5px; }
+  .tag { display:inline-block; font-size: 9.5px; font-weight: 700; padding: 2px 7px; border-radius: 20px; background: var(--line-soft); color: var(--muted); margin-top: 6px; letter-spacing: .01em; }
+  .tag.discovery { background: var(--warn-soft); color: var(--warn); }
+  .catalog-item { font-size: 11.5px; color: var(--ink); border-top: 1px dashed var(--line); padding: 6px 0 0; margin-top: 7px; }
+  .catalog-item .attrs { color: var(--muted); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align:left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted-soft); border-bottom: 1.5px solid var(--line); padding: 8px; font-weight: 700; }
+  td { padding: 10px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  tr.tx-row { cursor: pointer; transition: background .15s var(--ease); }
+  tr.tx-row:hover { background: var(--line-soft); }
+  tr.tx-row td:first-child { font-family: ui-monospace, Menlo, monospace; }
+  .empty { color: var(--muted-soft); font-size: 12.5px; font-style: italic; padding: 16px 0; }
+  pre.trace { background: var(--line-soft); padding: 11px; border-radius: var(--radius-sm); font-size: 11px; overflow-x: auto; margin: 6px 0 0; font-family: ui-monospace, Menlo, monospace; }
+  .tx-detail { display:none; }
+  .tx-detail.open { display:table-row; animation: fade .2s var(--ease); }
+  @keyframes fade { from { opacity:0; } to { opacity:1; } }
+
+  .topo { position: relative; height: 380px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); margin-bottom: 8px; box-shadow: var(--shadow-sm); }
+  .topo svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .topo-box { position: absolute; transform: translate(-50%, -50%); width: 150px; text-align: center; border-radius: var(--radius-md); padding: 10px 8px; background: var(--surface); box-shadow: var(--shadow-md); transition: transform .18s var(--ease); }
+  .topo-box:hover { transform: translate(-50%, -50%) translateY(-2px); }
+  .topo-box .role { font-size: 8.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+  .topo-box h4 { margin: 2px 0 1px; font-size: 12.5px; letter-spacing: -.01em; }
+  .topo-box .sub { font-size: 9.5px; color: var(--muted); }
+  .topo-box.infra { border: 1.5px solid #94a3b8; }
+  .topo-box.infra .role { color: #64748b; }
+  .topo-box.bap { border: 1.5px solid #1d4ed8; }
+  .topo-box.bap .role { color: #1d4ed8; }
+  .topo-box.bpp { border: 1.5px dashed var(--accent); background: var(--accent-soft); }
+  .topo-box.bpp .role { color: var(--accent); }
+  .topo-box.adapter { border: 1.5px solid var(--purple); background: var(--purple-soft); }
+  .topo-box.adapter .role { color: var(--purple); }
+  .topo-label { position: absolute; font-size: 9.5px; color: var(--muted); background: var(--surface); padding: 0 4px; transform: translate(-50%, -50%); white-space: nowrap; }
+
+  .legend { display:flex; flex-wrap:wrap; gap: 16px; font-size: 11.5px; color: var(--muted); margin: 12px 0 24px; }
+  .legend span.swatch { display:inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .bpp-badge { display:inline-block; font-size: 9px; font-weight: 800; letter-spacing: .04em; color: var(--accent); border: 1px solid var(--accent); border-radius: 4px; padding: 1px 5px; margin-right: 6px; }
+  .pattern-badge { display:inline-block; font-size: 9px; font-weight: 700; letter-spacing: .02em; padding: 2px 7px; border-radius: 5px; margin-top: 7px; }
+  .pattern-badge.independent { background: var(--line-soft); color: var(--muted); }
+  .pattern-badge.mediated { background: var(--purple-soft); color: var(--purple); border: 1px solid var(--purple-line); }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Network Console <small>Every call on this page goes straight to that node's own port -- open devtools' Network tab to watch it.</small></div>
+  <a href="/">&larr; Landing</a>
+</header>
+
+<div class="wrap">
+  <section>
+    <h2>Network topology</h2>
+    <p class="sub">Five kinds of node, two different ways a provider can participate. Solid lines = discovery (goes through the Gateway, hits both kinds of provider the same way). Dashed lines = the transaction actions (select/init/confirm/fulfil), which skip the Gateway entirely -- BAP talks straight to whichever URL it already has from that provider's own earlier reply.</p>
+    <div class="topo" style="height:380px;">
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+        <line x1="13" y1="48" x2="46" y2="23" stroke="#94a3b8" stroke-width="1.2" vector-effect="non-scaling-stroke"/>
+        <line x1="55" y1="20" x2="78" y2="20" stroke="#94a3b8" stroke-width="1.2" vector-effect="non-scaling-stroke"/>
+        <line x1="46" y1="27" x2="32" y2="76" stroke="#94a3b8" stroke-width="1.2" vector-effect="non-scaling-stroke"/>
+        <line x1="53" y1="27" x2="70" y2="76" stroke="#94a3b8" stroke-width="1.2" vector-effect="non-scaling-stroke"/>
+        <line x1="12" y1="54" x2="27" y2="78" stroke="#1d4ed8" stroke-width="1.2" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>
+        <line x1="14" y1="57" x2="65" y2="80" stroke="#1d4ed8" stroke-width="1.2" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>
+      </svg>
+      <div class="topo-label" style="left:26%;top:32%;">discover</div>
+      <div class="topo-label" style="left:66%;top:16%;">lookup providers</div>
+      <div class="topo-label" style="left:38%;top:52%;">broadcasts search</div>
+      <div class="topo-label" style="left:19%;top:70%;">direct</div>
+      <div class="topo-label" style="left:41%;top:71%;">select / init / confirm / fulfil (direct)</div>
+
+      <div class="topo-box bap" style="left:12%;top:48%;">
+        <div class="role">BAP</div><h4>nfh-bap-v2</h4><div class="sub">port 9503 &middot; acts for Naledi</div>
+      </div>
+      <div class="topo-box infra" style="left:48%;top:20%;">
+        <div class="role">Gateway</div><h4>facilitator</h4><div class="sub">port 9502 &middot; discovery only</div>
+      </div>
+      <div class="topo-box infra" style="left:82%;top:20%;">
+        <div class="role">Registry</div><h4>facilitator</h4><div class="sub">port 9501 &middot; who's registered where</div>
+      </div>
+      <div class="topo-box bpp" style="left:30%;top:80%;">
+        <div class="role" id="topo-independent-count">Independent BPP</div><h4>own process each</h4><div class="sub" id="topo-independent-ports">ports 9601 / 9607 onward</div>
+      </div>
+      <div class="topo-box adapter" style="left:70%;top:80%;">
+        <div class="role">My Journey Adapter</div><h4 id="topo-adapter-count">mediates 0</h4><div class="sub">port 9605 &middot; one shared process</div>
+      </div>
+    </div>
+    <div class="legend">
+      <div><span class="swatch" style="background:#1d4ed8"></span>BAP -- Beckn Application Platform. Acts on the consumer's behalf. The one node the webapps talk to.</div>
+      <div><span class="swatch" style="background:#94a3b8"></span>Facilitator (Registry + Gateway) -- never transacts, only helps discovery happen.</div>
+      <div><span class="swatch" style="background:#1e6f5c"></span>Independent node -- runs its own real process. SmartStart, Grow, Thabo A/B/C today.</div>
+      <div><span class="swatch" style="background:#9333ea"></span>Platform-mediated -- published and answered by the shared My Journey Adapter instead of its own process. Imbe today -- see its catalog card below for why.</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Infrastructure</h2>
+    <p class="sub">Registry, Gateway and BAP are the three fixed, always-exactly-one nodes. The BPP layer is represented here too, as two live summary cards -- the individual providers and their catalogs still get their own richer section below ("Providers &amp; catalogs") since there can be any number of them.</p>
+    <div class="grid">
+      <div id="infra-grid" style="display:contents;"></div>
+      <div id="infra-bpp-cards" style="display:contents;"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Providers &amp; catalogs</h2>
+    <p class="sub">Independent providers each run their own process; Platform-mediated ones share the My Journey Adapter's -- the badge on each card says which. Every catalog is still read straight from that provider's own <code>/catalog</code> endpoint (with <code>?provider_id=</code> so the adapter knows which of its mediated providers you're asking about) -- not proxied, not cached elsewhere.</p>
+    <div id="providers-body">
+      <p class="empty">Loading…</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Live transactions</h2>
+    <p class="sub">Every transaction any tab has started, read live from the BAP. Click a row for its full message trace.</p>
+    <table>
+      <thead><tr><th>tx</th><th>domain</th><th>participant</th><th>providers answered</th><th>order status</th><th>messages</th></tr></thead>
+      <tbody id="tx-body"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </section>
+</div>
+
+<script>
+const BAP = "";
+const INFRA = [
+  { id: "registry", name: "Registry", role: "Facilitator", port: 9501, url: "http://127.0.0.1:9501" },
+  { id: "gateway", name: "Gateway", role: "Facilitator", port: 9502, url: "http://127.0.0.1:9502" },
+  { id: "bap", name: "nfh-bap-v2", role: "BAP -- Beckn Application Platform", port: 9503, url: "http://127.0.0.1:9503" },
+];
+const DOMAINS = ["ngo-support", "coaching"];
+let openTx = null;
+
+async function checkHealth(url) {
+  try {
+    const res = await fetch(url + "/health", { signal: AbortSignal.timeout(2000) });
+    return res.ok;
+  } catch (e) { return false; }
+}
+
+async function renderInfra() {
+  const grid = document.getElementById("infra-grid");
+  const statuses = await Promise.all(INFRA.map(n => checkHealth(n.url)));
+  grid.innerHTML = INFRA.map((n, i) => `
+    <div class="node">
+      <div class="top"><h3>${n.name}</h3><span class="dot ${statuses[i] ? "up" : "down"}"></span></div>
+      <div class="meta" style="font-weight:700;color:${n.id === "bap" ? "#1d4ed8" : "#64748b"};">${n.role}</div>
+      <div class="meta">Direct check: <span class="port">${n.url}/health</span></div>
+      <div class="meta">${statuses[i] ? "Responding" : "Not reachable"}</div>
+    </div>
+  `).join("");
+}
+
+async function loadProvidersForDomain(domain) {
+  const res = await fetch(`${BAP}/client/providers?domain=${domain}`);
+  const providers = await res.json();
+  const cards = await Promise.all(providers.map(async (p) => {
+    // ?provider_id= is ignored by a regular BPP's /catalog (only the
+    // adapter uses it, to know which of its mediated providers to
+    // return) -- passing it always keeps this one fetch working for both.
+    const [up, cat] = await Promise.all([
+      checkHealth(p.url),
+      fetch(`${p.url}/catalog?provider_id=${p.subscriber_id}`, { signal: AbortSignal.timeout(2000) }).then(r => r.json()).catch(() => null),
+    ]);
+    return { p, up, cat };
+  }));
+  return cards;
+}
+
+async function renderProviders() {
+  const body = document.getElementById("providers-body");
+  const byDomain = await Promise.all(DOMAINS.map(async d => ({ domain: d, cards: await loadProvidersForDomain(d) })));
+  body.innerHTML = byDomain.map(({ domain, cards }) => `
+    <p style="font-size:12px;font-weight:700;color:var(--muted);margin:14px 0 8px;text-transform:uppercase;letter-spacing:.03em;">${domain} (${cards.length})</p>
+    <div class="grid">
+      ${cards.map(({ p, up, cat }) => `
+        <div class="node">
+          <div class="top"><h3>${p.subscriber_id}</h3><span class="dot ${up ? "up" : "down"}"></span></div>
+          <div class="meta"><span class="bpp-badge">BPP</span>Port <span class="port">${p.url.split(":").pop()}</span></div>
+          <span class="tag ${p.participation_type === "discovery_only" ? "discovery" : ""}">${p.participation_type.replace("_", " ")}</span>
+          <div><span class="pattern-badge ${p.participation_pattern === "platform_mediated" ? "mediated" : "independent"}">${
+            p.participation_pattern === "platform_mediated" ? "via My Journey Adapter" : "independent node"
+          }</span></div>
+          ${cat ? cat.items.map(i => `
+            <div class="catalog-item"><b>${i.name}</b><div class="attrs">${Object.entries(i.attributes).map(([k, v]) => `${k}: ${v}`).join(" &middot; ")}</div></div>
+          `).join("") : `<div class="catalog-item" style="color:var(--warn)">Could not read catalog directly.</div>`}
+        </div>
+      `).join("")}
+    </div>
+  `).join("");
+
+  const allCards = byDomain.flatMap(d => d.cards);
+  const independentCards = allCards.filter(c => c.p.participation_pattern !== "platform_mediated");
+  const mediatedCards = allCards.filter(c => c.p.participation_pattern === "platform_mediated");
+  const independent = independentCards.map(c => c.p);
+  const mediated = mediatedCards.map(c => c.p);
+  const independentPorts = independent.map(p => Number(p.url.split(":").pop()));
+  const independentUp = independentCards.filter(c => c.up).length;
+
+  document.getElementById("topo-independent-count").textContent = `Independent BPP × ${independent.length}`;
+  document.getElementById("topo-independent-ports").textContent =
+    independentPorts.length ? `ports ${Math.min(...independentPorts)}–${Math.max(...independentPorts)} · one process each` : "none registered yet";
+  document.getElementById("topo-adapter-count").textContent =
+    mediated.length ? `mediates ${mediated.length}: ${mediated.map(p => p.subscriber_id).join(", ")}` : "mediates 0";
+
+  // The BPP layer, represented as two more infra-style cards (same grid,
+  // same look as Registry/Gateway/BAP) so it isn't only a cross-reference
+  // note -- one aggregate card for every independent BPP, one for the
+  // adapter, both driven by the same live data as everything above.
+  const bppCards = [];
+  bppCards.push(`
+    <div class="node">
+      <div class="top"><h3>Independent BPPs</h3><span class="dot ${independentUp === independent.length && independent.length ? "up" : independent.length ? "down" : ""}"></span></div>
+      <div class="meta" style="font-weight:700;color:var(--accent-dark);">BPP layer &middot; independent</div>
+      <div class="meta">${independent.length} process${independent.length === 1 ? "" : "es"} &middot; ${independentUp}/${independent.length} responding</div>
+      <div class="meta">${independent.map(p => p.subscriber_id).join(", ") || "none registered"}</div>
+    </div>
+  `);
+  if (mediated.length) {
+    const adapterUrl = mediated[0].url;
+    const adapterUp = mediatedCards.every(c => c.up);
+    bppCards.push(`
+      <div class="node">
+        <div class="top"><h3>My Journey Adapter</h3><span class="dot ${adapterUp ? "up" : "down"}"></span></div>
+        <div class="meta" style="font-weight:700;color:var(--purple);">BPP layer &middot; Platform-mediated</div>
+        <div class="meta">Direct check: <span class="port">${adapterUrl}/health</span></div>
+        <div class="meta">Mediates: ${mediated.map(p => p.subscriber_id).join(", ")}</div>
+      </div>
+    `);
+  }
+  document.getElementById("infra-bpp-cards").innerHTML = bppCards.join("");
+}
+
+async function renderTransactions() {
+  const body = document.getElementById("tx-body");
+  const res = await fetch(`${BAP}/client/transactions`);
+  const txs = await res.json();
+  if (!txs.length) { body.innerHTML = `<tr><td colspan="6" class="empty">No transactions yet -- start one from Naledi's app.</td></tr>`; return; }
+  body.innerHTML = txs.map(t => `
+    <tr class="tx-row" data-tx="${t.tx_id}">
+      <td><code>${t.tx_id}</code></td><td>${t.domain}</td><td>${t.participant_name}</td>
+      <td>${t.providers_answered}</td><td>${t.order_status || "&mdash;"}</td><td>${t.message_count}</td>
+    </tr>
+    <tr class="tx-detail ${openTx === t.tx_id ? "open" : ""}" data-detail="${t.tx_id}"><td colspan="6"><pre class="trace"></pre></td></tr>
+  `).join("");
+  body.querySelectorAll(".tx-row").forEach(row => row.onclick = async () => {
+    const txId = row.dataset.tx;
+    const detail = body.querySelector(`[data-detail="${txId}"]`);
+    if (openTx === txId) { openTx = null; detail.classList.remove("open"); return; }
+    openTx = txId;
+    body.querySelectorAll(".tx-detail").forEach(d => d.classList.remove("open"));
+    detail.classList.add("open");
+    const log = await fetch(`${BAP}/client/log/${txId}`).then(r => r.json());
+    detail.querySelector("pre").textContent = log.map(e => `[${e.direction}] ${e.note}`).join("\n");
+  });
+}
+
+async function tick() {
+  await Promise.all([renderInfra(), renderProviders(), renderTransactions()]);
+}
+tick();
+setInterval(tick, 4000);
+</script>
+</body>
+</html>

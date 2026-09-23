@@ -1,9 +1,17 @@
 """
 Boots every service real_protocol has for both domains -- Registry,
-Gateway, BAP, the six ngo-support BPPs, and the five coaching BPPs -- and
-registers them all, then just stays up so a frontend can drive them
-interactively. run_demo.py boots only ngo-support, runs one scripted
-transaction, and tears everything down at the end; this doesn't.
+Gateway, BAP, and one BPP per provider in domains/ngo_support.py and
+domains/coaching.py (currently 3 + 3) -- and registers them all, then
+just stays up so a frontend can drive them interactively. run_demo.py
+boots only ngo-support, runs one scripted transaction, and tears
+everything down at the end; this doesn't.
+
+Note: ngo_support.py now splits its providers into build_providers()
+(independent nodes) and build_mediated_providers() (Platform-mediated,
+served by network_v2's My Journey Adapter there). real_protocol doesn't
+model that distinction -- it has no adapter concept -- so it just treats
+every provider from both functions as one more independent process,
+which is exactly what it did before that split existed.
 
     python -m real_protocol.serve
 
@@ -18,7 +26,7 @@ from real_protocol.run_demo import (
     BAP_URL, GATEWAY_URL, REGISTRY_URL, start_service, wait_healthy,
 )
 
-NGO_PROVIDERS = ngo_support.build_providers()
+NGO_PROVIDERS = ngo_support.build_providers() + ngo_support.build_mediated_providers()
 NGO_PORTS = {p.id: 9101 + i for i, p in enumerate(NGO_PROVIDERS)}
 
 COACHING_PROVIDERS = coaching.build_providers()

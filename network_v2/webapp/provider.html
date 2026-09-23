@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Provider Console</title>
+<style>
+  :root {
+    --accent:#1e6f5c; --accent-dark:#123e33; --accent-soft:#e6f4ee; --accent-line:#bfe2d1;
+    --ink:#171e27; --muted:#5c6773; --muted-soft:#98a2ad;
+    --bg:#eef1f4; --surface:#ffffff; --line:#e2e7eb; --line-soft:#edf1f4;
+    --warn:#ab431c; --warn-soft:#fbe9e1; --warn-line:#f2c9b3;
+    --radius-lg:16px; --radius-md:12px; --radius-sm:8px;
+    --shadow-sm: 0 1px 2px rgba(20,28,38,.05), 0 1px 1px rgba(20,28,38,.04);
+    --shadow-lg: 0 20px 45px -12px rgba(20,28,38,.18);
+    --ease: cubic-bezier(.22,.9,.35,1);
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background: var(--bg); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 640px; margin: 0 auto; min-height: 100vh; background: var(--surface); box-shadow: var(--shadow-lg); }
+  header { background: linear-gradient(135deg, var(--accent-dark) 0%, #0d2b23 130%); color: white; padding: 16px 22px; display:flex; align-items:center; justify-content:space-between; }
+  header .brand { font-weight: 700; font-size: 15px; letter-spacing: -.01em; }
+  header a { color: rgba(255,255,255,0.82); font-size: 12px; text-decoration: none; transition: color .15s var(--ease); }
+  header a:hover { color: white; }
+  main { padding: 24px; animation: fade .28s var(--ease); }
+  @keyframes fade { from { opacity:0; transform: translateY(6px);} to {opacity:1; transform:none;} }
+
+  label.field { display:block; font-size:11.5px; font-weight:600; color:var(--muted); margin-bottom:5px; margin-top:14px; letter-spacing:.01em; }
+  label.field:first-child { margin-top: 0; }
+  select, input {
+    width: 100%; padding: 10px 12px; border: 1.5px solid var(--line); border-radius: var(--radius-sm);
+    font-size: 14.5px; font-family: inherit; background: var(--surface); color: var(--ink);
+    transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
+  }
+  select:focus, input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  button.primary {
+    background: var(--accent); color: white; border: none; padding: 12px 18px; border-radius: var(--radius-sm);
+    font-size: 13.5px; font-weight: 700; cursor: pointer; margin-top: 16px;
+    box-shadow: 0 2px 10px -2px rgba(30,111,92,.45); transition: all .15s var(--ease);
+  }
+  button.primary:hover:not(:disabled) { background: var(--accent-dark); transform: translateY(-1px); }
+  button.primary:disabled { background: #c2c9cf; cursor: not-allowed; box-shadow: none; }
+
+  nav.tabs { display:flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+  nav.tabs button { flex:1; background:none; border:none; padding: 11px 0; font-size: 13px; font-weight: 600; color: var(--muted); cursor:pointer; border-bottom: 2px solid transparent; transition: all .15s var(--ease); position: relative; top: 1px; }
+  nav.tabs button:hover { color: var(--accent-dark); }
+  nav.tabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .row {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    border: 1px solid var(--line); border-radius: var(--radius-md); padding: 13px 15px; margin-bottom: 10px;
+    background: var(--surface); transition: box-shadow .18s var(--ease), border-color .18s var(--ease);
+    animation: fade .28s var(--ease);
+  }
+  .row:hover { box-shadow: var(--shadow-sm); border-color: var(--accent-line); }
+  .row .meta { font-size: 12px; color: var(--muted); }
+  .row h4 { margin: 0 0 2px; font-size: 14px; letter-spacing: -.01em; }
+  .row .actions { display:flex; gap: 6px; flex-shrink: 0; }
+  button.small { border: 1.5px solid var(--line); background: var(--surface); padding: 7px 12px; border-radius: 7px; font-size: 12px; font-weight: 700; cursor: pointer; color: var(--muted); transition: all .15s var(--ease); }
+  button.small.accept { border-color: var(--accent); color: var(--accent); }
+  button.small.accept:hover { background: var(--accent); color: white; }
+  button.small.decline { border-color: var(--warn); color: var(--warn); }
+  button.small.decline:hover { background: var(--warn); color: white; }
+  button.small.fulfil { border-color: var(--accent); color: var(--accent); }
+  button.small.fulfil:hover { background: var(--accent); color: white; }
+  .empty { color: var(--muted-soft); font-size: 13px; font-style: italic; padding: 36px 0; text-align:center; }
+  .tag { display:inline-block; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 20px; background: var(--line-soft); color: var(--muted); margin-left: 6px; letter-spacing: .01em; }
+  .tag.ok { background: var(--accent-soft); color: var(--accent); }
+
+  .log { margin-top: 26px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .log summary { cursor: pointer; font-size: 11px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; list-style: none; }
+  .log summary::-webkit-details-marker { display: none; }
+  .log summary::before { content: "▸ "; color: var(--muted-soft); }
+  .log[open] summary::before { content: "▾ "; }
+  .log-entry { font-size: 12px; color: var(--muted); padding: 4px 0; border-bottom: 1px solid var(--line-soft); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><span class="brand">Provider Console</span><a href="/">Switch app</a></header>
+  <main id="main"></main>
+</div>
+<script>
+let state = { screen: "login", domain: "ngo-support", providers: [], providerId: null, bppUrl: null,
+              tab: "pending", pending: [], commitments: [], history: [], actionLog: [], timer: null };
+
+async function call(method, base, path, opts = {}) {
+  const url = new URL(path, base);
+  if (opts.params) Object.entries(opts.params).forEach(([k, v]) => url.searchParams.set(k, v));
+  const res = await fetch(url, { method });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail || res.statusText);
+  return body;
+}
+
+function logAction(text) {
+  state.actionLog.unshift({ text, at: new Date().toLocaleTimeString() });
+  state.actionLog = state.actionLog.slice(0, 12);
+}
+
+async function loadProviders(domain) {
+  state.providers = await call("GET", location.origin, "/client/providers", { params: { domain } });
+}
+
+async function refreshTab() {
+  if (!state.bppUrl) return;
+  try {
+    if (state.tab === "pending") state.pending = await call("GET", state.bppUrl, "/provider/pending");
+    if (state.tab === "active") state.commitments = await call("GET", state.bppUrl, "/provider/commitments");
+    if (state.tab === "history") state.history = await call("GET", state.bppUrl, "/provider/history");
+  } catch (e) { /* provider process may be between polls -- ignore transient errors */ }
+  render();
+}
+
+function startPolling() {
+  if (state.timer) clearInterval(state.timer);
+  state.timer = setInterval(refreshTab, 2000);
+}
+
+async function accept(txId) {
+  await call("POST", state.bppUrl, `/provider/pending/${txId}/accept`);
+  logAction(`Accepted request ${txId}`);
+  await refreshTab();
+}
+async function decline(txId) {
+  const reason = prompt("Reason (shown to the requester):", "At capacity this week.") || "Not available.";
+  await call("POST", state.bppUrl, `/provider/pending/${txId}/decline`, { params: { reason } });
+  logAction(`Declined request ${txId}`);
+  await refreshTab();
+}
+async function fulfil(txId) {
+  await call("POST", state.bppUrl, `/provider/commitments/${txId}/fulfil`);
+  logAction(`Marked ${txId} as fulfilled`);
+  await refreshTab();
+}
+
+function render() {
+  const main = document.getElementById("main");
+
+  if (state.screen === "login") {
+    main.innerHTML = `
+      <h2 style="margin:0 0 4px;font-size:17px;">Who are you logging in as?</h2>
+      <p style="color:var(--muted);font-size:13px;margin:0 0 4px;">Pick your domain, then yourself from the registry.</p>
+      <label class="field">Domain</label>
+      <select id="f-domain">
+        <option value="ngo-support" ${state.domain === "ngo-support" ? "selected" : ""}>NGO support</option>
+        <option value="coaching" ${state.domain === "coaching" ? "selected" : ""}>Coaching</option>
+      </select>
+      <label class="field">Provider</label>
+      <select id="f-provider"><option>Loading…</option></select>
+      <button class="primary" id="f-login">Log in</button>
+    `;
+    const loadList = async () => {
+      await loadProviders(state.domain);
+      const sel = document.getElementById("f-provider");
+      sel.innerHTML = state.providers.map(p => `<option value="${p.subscriber_id}">${p.subscriber_id} (${p.participation_type})</option>`).join("");
+    };
+    loadList();
+    document.getElementById("f-domain").onchange = (e) => { state.domain = e.target.value; loadList(); };
+    document.getElementById("f-login").onclick = () => {
+      const id = document.getElementById("f-provider").value;
+      const p = state.providers.find(x => x.subscriber_id === id);
+      if (!p) return;
+      state.providerId = p.subscriber_id;
+      state.bppUrl = p.url;
+      state.screen = "console";
+      startPolling();
+      refreshTab();
+    };
+    return;
+  }
+
+  if (state.screen === "console") {
+    main.innerHTML = `
+      <p style="font-size:12.5px;color:var(--muted);margin:0 0 14px;">Logged in as <b>${state.providerId}</b> &middot; <a href="#" id="f-logout" style="color:var(--accent);">log out</a></p>
+      <nav class="tabs">
+        <button data-tab="pending" class="${state.tab === "pending" ? "active" : ""}">Inbox${state.pending.length ? " (" + state.pending.length + ")" : ""}</button>
+        <button data-tab="active" class="${state.tab === "active" ? "active" : ""}">Active</button>
+        <button data-tab="history" class="${state.tab === "history" ? "active" : ""}">Completed</button>
+      </nav>
+      <div id="tab-body"></div>
+      <details class="log"><summary>Recent actions (${state.actionLog.length})</summary>
+        ${state.actionLog.map(a => `<div class="log-entry">${a.at} &mdash; ${a.text}</div>`).join("") || '<div class="log-entry">Nothing yet.</div>'}
+      </details>
+    `;
+    document.getElementById("f-logout").onclick = (e) => { e.preventDefault(); clearInterval(state.timer); state.screen = "login"; render(); };
+    main.querySelectorAll("nav.tabs button").forEach(b => b.onclick = () => { state.tab = b.dataset.tab; refreshTab(); });
+
+    const body = document.getElementById("tab-body");
+    if (state.tab === "pending") {
+      body.innerHTML = state.pending.length ? state.pending.map(r => `
+        <div class="row">
+          <div><h4>Request ${r.tx_id}</h4><div class="meta">Item: ${r.item_id}</div></div>
+          <div class="actions">
+            <button class="small accept" data-tx="${r.tx_id}" data-act="accept">Accept</button>
+            <button class="small decline" data-tx="${r.tx_id}" data-act="decline">Decline</button>
+          </div>
+        </div>`).join("") : `<div class="empty">No pending requests.</div>`;
+      body.querySelectorAll("button[data-act]").forEach(b => b.onclick = () => b.dataset.act === "accept" ? accept(b.dataset.tx) : decline(b.dataset.tx));
+    }
+    if (state.tab === "active") {
+      body.innerHTML = state.commitments.length ? state.commitments.map(c => `
+        <div class="row">
+          <div><h4>${c.id || c.tx_id}</h4><div class="meta">Item: ${c.items?.[0]?.id || ""} <span class="tag ok">RESERVED</span></div></div>
+          <div class="actions"><button class="small fulfil" data-tx="${c.tx_id}">Mark fulfilled</button></div>
+        </div>`).join("") : `<div class="empty">No active commitments.</div>`;
+      body.querySelectorAll("button[data-tx]").forEach(b => b.onclick = () => fulfil(b.dataset.tx));
+    }
+    if (state.tab === "history") {
+      body.innerHTML = state.history.length ? state.history.map(c => `
+        <div class="row">
+          <div><h4>${c.id || c.tx_id}</h4><div class="meta">${c.fulfilment_note || ""}</div></div>
+          <span class="tag ${c.status === "VERIFIED" ? "ok" : ""}">${c.status}</span>
+        </div>`).join("") : `<div class="empty">Nothing completed yet.</div>`;
+    }
+    return;
+  }
+}
+
+render();
+</script>
+</body>
+</html>

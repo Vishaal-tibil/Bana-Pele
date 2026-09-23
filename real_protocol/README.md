@@ -1,16 +1,22 @@
 # Real-protocol sketch
 
 Same UC1 + UC2 story as `shared/network.py` + `domains/*.py` (Registry,
-Gateway, BAP, eleven BPPs across both domains, discovery-only vs
+Gateway, BAP, one BPP per provider in `domains/ngo_support.py` +
+`domains/coaching.py` -- currently 4 + 3 = 7 -- discovery-only vs
 full-transaction), rebuilt so the nodes are genuinely separate HTTP
 services instead of Python classes calling each other's methods directly.
 
 ## What's real here (vs. `shared/` + `api.py`)
 
 - **Separate services, separate ports.** Registry (9001), Gateway (9002),
-  BAP (9003), one process per ngo-support provider (9101-9106), and one
-  process per coaching provider (9107-9111) -- `run_demo.py`/`serve.py`
-  launch each with `subprocess.Popen`, not `asyncio` calls in one process.
+  BAP (9003), one process per ngo-support provider starting at 9101, and
+  one process per coaching provider starting at 9107 -- `run_demo.py`/
+  `serve.py` launch each with `subprocess.Popen`, not `asyncio` calls in
+  one process. The provider count (and so the exact port range used)
+  follows whatever's in `domains/*.py` -- it's currently 4 ngo-support +
+  3 coaching, not the 6 + 5 this used to say, because that catalog was
+  rewritten to only use names and categories the architecture doc
+  actually names (see `domains/ngo_support.py`'s docstring).
 - **Real relevance matching.** Each BPP's `on_search` handler
   (`bpp_service.py`'s `_matching_items`) actually filters its catalog
   against the intent's free-text category and region tag -- an empty
@@ -69,8 +75,8 @@ pip install -r requirements.txt
 python -m real_protocol.run_demo
 ```
 
-**Live, for the frontend to drive** (both domains: boots all 14 services
--- registry, gateway, BAP, 6 ngo-support BPPs, 5 coaching BPPs -- and
+**Live, for the frontend to drive** (both domains: boots all 10 services
+-- registry, gateway, BAP, 4 ngo-support BPPs, 3 coaching BPPs -- and
 registers them, then stays up -- Ctrl+C to stop):
 
 ```
