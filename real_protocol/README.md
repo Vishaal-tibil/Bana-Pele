@@ -2,7 +2,7 @@
 
 Same UC1 + UC2 story as `shared/network.py` + `domains/*.py` (Registry,
 Gateway, BAP, one BPP per provider in `domains/ngo_support.py` +
-`domains/coaching.py` -- currently 4 + 3 = 7 -- discovery-only vs
+`domains/coaching.py` -- currently 3 + 3 = 6 -- discovery-only vs
 full-transaction), rebuilt so the nodes are genuinely separate HTTP
 services instead of Python classes calling each other's methods directly.
 
@@ -13,8 +13,9 @@ services instead of Python classes calling each other's methods directly.
   one process per coaching provider starting at 9107 -- `run_demo.py`/
   `serve.py` launch each with `subprocess.Popen`, not `asyncio` calls in
   one process. The provider count (and so the exact port range used)
-  follows whatever's in `domains/*.py` -- it's currently 4 ngo-support +
-  3 coaching, not the 6 + 5 this used to say, because that catalog was
+  follows whatever's in `domains/*.py` -- it's currently 3 ngo-support +
+  3 coaching (Imbe runs here as one more ordinary process -- this system has
+  no adapter concept), not the 6 + 5 this used to say, because that catalog was
   rewritten to only use names and categories the architecture doc
   actually names (see `domains/ngo_support.py`'s docstring).
 - **Real relevance matching.** Each BPP's `on_search` handler
@@ -75,8 +76,8 @@ pip install -r requirements.txt
 python -m real_protocol.run_demo
 ```
 
-**Live, for the frontend to drive** (both domains: boots all 10 services
--- registry, gateway, BAP, 4 ngo-support BPPs, 3 coaching BPPs -- and
+**Live, for the frontend to drive** (both domains: boots all 9 services
+-- registry, gateway, BAP, 3 ngo-support BPPs, 3 coaching BPPs -- and
 registers them, then stays up -- Ctrl+C to stop):
 
 ```
