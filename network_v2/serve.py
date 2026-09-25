@@ -17,6 +17,16 @@ Port map (compare to real_protocol's 9001-9003 / 9101 onward):
 
     python -m network_v2.serve
 
+Also registers the Gateway itself with the Registry as a "BG" participant
+(previously the Registry's schema allowed that type but nothing ever
+used it -- the Gateway's address was only ever a hardcoded constant
+every other service happened to know, not something discoverable
+through the Registry the way a BAP or BPP is). Set NETWORK_NAME /
+NETWORK_OPERATOR / NETWORK_OPERATOR_CONTACT env vars before running this
+to declare who operates the network -- see registry.py's GET /policy;
+left unset, the network runs with honest "not yet decided" governance
+answers rather than a hidden default.
+
 Ctrl+C stops and tears down every process cleanly.
 """
 import subprocess
@@ -93,25 +103,40 @@ def main():
         print("all network_v2 services healthy\n")
 
         with httpx.Client(timeout=5.0) as client:
+            # BAP: not registered under one domain -- it asks across
+            # whichever domain a search names (see bap_service.py's
+            # /client/search), so pinning it to ngo-support here was
+            # never accurate. domain=None (via omission) means "not
+            # scoped to a single domain."
             client.post(f"{REGISTRY_URL}/subscribe", json={
-                "subscriber_id": "nfh-bap-v2", "url": BAP_URL, "domain": ngo_support.DOMAIN, "type": "BAP",
+                "subscriber_id": "nfh-bap-v2", "url": BAP_URL, "types": ["BAP"],
+            })
+            # Gateway: previously never registered at all -- every other
+            # service just hardcoded its address. Now it's a real,
+            # discoverable "BG" participant, also not domain-scoped.
+            client.post(f"{REGISTRY_URL}/subscribe", json={
+                "subscriber_id": "nfh-gateway-v2", "url": GATEWAY_URL, "types": ["BG"],
             })
             for domain, providers, ports in DOMAINS:
                 for p in providers:
                     client.post(f"{REGISTRY_URL}/subscribe", json={
                         "subscriber_id": p.id, "url": f"http://127.0.0.1:{ports[p.id]}",
-                        "domain": domain, "type": "BPP", "participation_type": p.participation_type,
+                        "domain": domain, "types": ["BPP"], "participation_type": p.participation_type,
                         "participation_pattern": "independent",
                     })
             for p in NGO_MEDIATED:
                 client.post(f"{REGISTRY_URL}/subscribe", json={
                     "subscriber_id": p.id, "url": ADAPTER_URL,
-                    "domain": ngo_support.DOMAIN, "type": "BPP", "participation_type": p.participation_type,
+                    "domain": ngo_support.DOMAIN, "types": ["BPP"], "participation_type": p.participation_type,
                     "participation_pattern": "platform_mediated",
                 })
-        print(f"registered 1 BAP + {len(NGO_PROVIDERS)} independent ngo-support BPPs + "
+            policy = client.get(f"{REGISTRY_URL}/policy").json()
+        print(f"registered 1 BAP + 1 Gateway (BG) + {len(NGO_PROVIDERS)} independent ngo-support BPPs + "
               f"{len(NGO_MEDIATED)} Platform-mediated (via My Journey Adapter) + "
               f"{len(COACHING_PROVIDERS)} independent coaching BPPs\n")
+        print(f"Network: \"{policy['network_name']}\"  |  Operator: {policy['operator']}")
+        print("(Set NETWORK_NAME / NETWORK_OPERATOR / NETWORK_OPERATOR_CONTACT env vars to declare "
+              "these instead of the placeholder defaults -- see registry.py's GET /policy.)\n")
         print(f"Open http://127.0.0.1:9503 in a browser -- Naledi's app, the Provider console "
               f"and the Network Console are all served from there.")
         print("(This is a separate port range from the existing real_protocol system -- "
