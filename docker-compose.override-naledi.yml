@@ -1,0 +1,156 @@
+# Swaps the starter kit's placeholder apps for ours:
+#   sandbox-bap = frontdoor-bap-server.js  (buyer side + the /v1 REST API)
+#   sandbox-bpp = backbone-bpp-server.js   (provider side)
+#
+#   docker compose -f docker-compose-generic.yml -f docker-compose.override-naledi.yml up --build -d
+#
+# Run from generic-devkit/install/, with the folder "our-backend-naledi"
+# placed right next to it.
+#
+# Connecting a partner backend (all optional -- leave empty to run standalone):
+#   API_KEY          key the partner sends in X-Api-Key when calling our /v1 API
+#   MATCH_URL        partner endpoint we call to ask "does this provider match?"
+#   EVENTS_URL       partner webhook we push events to
+#   EVENTS_API_KEY   key we send to the partner (defaults to API_KEY)
+# e.g.  API_KEY=... MATCH_URL=https://host/api/v1/network/match \
+#       EVENTS_URL=https://host/api/v1/network/events docker compose ... up -d
+#
+# To test our side without the partner, start the stand-in as well:
+#   docker compose -f docker-compose-generic.yml -f docker-compose.override-naledi.yml --profile test up --build -d
+#
+# IMPORTANT: overriding "environment" as a list REPLACES the base file's list
+# entirely rather than merging -- so PORT is repeated here explicitly.
+
+services:
+  sandbox-bap:
+    command: ["node", "frontdoor-bap-server.js"]
+    build:
+      context: ./our-backend-naledi
+      args:
+        SERVER_FILE: frontdoor-bap-server.js
+    restart: unless-stopped
+    environment:
+      - PORT=3001
+      # Outbound caller of the BAP adapter (the action name is appended).
+      - BACKBONE_CALLER=http://onix-bap:8081/bap/caller
+      # Direct, non-Beckn reads/relays to the provider app on the internal network.
+      - BACKBONE_BASE_URL=http://sandbox-bpp:3002
+      - API_KEY=${API_KEY:-demo-key-change-me}
+      - INTERNAL_KEY=${INTERNAL_KEY:-}
+      - EVENTS_URL=${EVENTS_URL:-}
+      - EVENTS_API_KEY=${EVENTS_API_KEY:-}
+      - DISCOVER_TTL=${DISCOVER_TTL:-}
+      - STATE_FILE=/data/bap-state.json
+      # Network identity (defaults are the starter kit's shared sandbox identities).
+      - BAP_ID=${BAP_ID:-bap.example.com}
+      - BPP_ID=${BPP_ID:-bpp.example.com}
+      - NETWORK_ID=${NETWORK_ID:-beckn.one/testnet}
+    volumes:
+      - naledi_state:/data
+    healthcheck:
+      # 127.0.0.1, not localhost: in this image "localhost" resolves to IPv6
+      # first, and the server listens on IPv4 only.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/api/health"]
+
+  sandbox-bpp:
+    command: ["node", "backbone-bpp-server.js"]
+    build:
+      context: ./our-backend-naledi
+      args:
+        SERVER_FILE: backbone-bpp-server.js
+    restart: unless-stopped
+    environment:
+      - PORT=3002
+      # Outbound caller of the BPP adapter (the action name is appended).
+      - ONIX_CALLER=http://onix-bpp:8082/bpp/caller
+      - API_KEY=${API_KEY:-demo-key-change-me}
+      - INTERNAL_KEY=${INTERNAL_KEY:-}
+      - MATCH_URL=${MATCH_URL:-}
+      - MATCH_TIMEOUT_MS=${MATCH_TIMEOUT_MS:-3000}
+      - EVENTS_URL=${EVENTS_URL:-}
+      - EVENTS_API_KEY=${EVENTS_API_KEY:-}
+      - OFFER_MESSAGE_ID=${OFFER_MESSAGE_ID:-new}
+      - STATE_FILE=/data/bpp-state.json
+    volumes:
+      - naledi_state:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3002/api/health"]
+
+  # The only door to the internet: exposes /v1/* (the partner API) and nothing
+  # else. Tunnel port 3010, never 3001/3002/8081/8082/9000.
+  edge:
+    image: caddy:alpine
+    container_name: naledi-edge
+    restart: unless-stopped
+    ports:
+      # Loopback only: reachable from this machine (and a tunnel running on it),
+      # not from the local network.
+      - "127.0.0.1:3010:3010"
+    networks:
+      - beckn_network
+    volumes:
+      - ./edge.Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - sandbox-bap
+
+  # Public URL for the edge, no account needed (profile "tunnel"): start with
+  # ./start.sh --tunnel. The URL is random and changes every start. Only the
+  # edge (/v1/*, key-protected) is exposed.
+  tunnel:
+    profiles: ["tunnel"]
+    image: cloudflare/cloudflared:latest
+    container_name: naledi-tunnel
+    command: tunnel --no-autoupdate --protocol http2 --url http://naledi-edge:3010
+    restart: unless-stopped
+    networks:
+      - beckn_network
+    depends_on:
+      - edge
+
+  # Test aid only (profile "test"): a working example of the partner's side,
+  # built with the drop-in kit in partner-kit/ (Express app with the two
+  # network endpoints and the calls into our API).
+  ref-partner:
+    profiles: ["test"]
+    build:
+      context: ./partner-kit
+      dockerfile: examples/Dockerfile
+    container_name: naledi-ref-partner
+    restart: unless-stopped
+    environment:
+      - PORT=3004
+      # Default: straight to our edge. Set REF_NETWORK_BASE_URL to our public
+      # tunnel URL to exercise the real internet path.
+      - NETWORK_BASE_URL=${REF_NETWORK_BASE_URL:-http://naledi-edge:3010}
+      - NETWORK_API_KEY=${API_KEY:-demo-key-change-me}
+    ports:
+      - "127.0.0.1:3004:3004"
+    networks:
+      - beckn_network
+    depends_on:
+      - edge
+
+  # Test aid only (profile "test"): a stand-in for the partner's backend.
+  mock-mj:
+    profiles: ["test"]
+    build:
+      context: ./our-backend-naledi
+      args:
+        SERVER_FILE: mock-mjourney.js
+    command: ["node", "mock-mjourney.js"]
+    restart: unless-stopped
+    environment:
+      - PORT=3003
+      - EVENT_KEY=${API_KEY:-demo-key-change-me}
+    ports:
+      - "127.0.0.1:3003:3003"
+    networks:
+      - beckn_network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3003/network/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  naledi_state:

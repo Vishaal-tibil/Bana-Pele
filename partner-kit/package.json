@@ -1,0 +1,8 @@
+{
+  "name": "partner-kit",
+  "private": true,
+  "description": "Drop-in kit for joining the network, with a reference Express app",
+  "engines": { "node": ">=18" },
+  "scripts": { "reference": "node examples/reference-app.js" },
+  "dependencies": { "express": "^4.19.2" }
+}
