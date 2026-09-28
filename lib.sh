@@ -42,13 +42,17 @@ wait_for_api() { # wait_for_api [seconds]
 
 # The two Beckn adapters take a few seconds after the apps to start listening.
 # Wait for both (judged from their own logs, since the last time they started).
+# Note: count with `grep -c` (reads everything) rather than `grep -q`; with
+# `set -o pipefail`, grep -q quitting early would make a long log look like a failure.
 wait_for_adapters() { # wait_for_adapters [seconds]
-  local n="${1:-90}" i s1 s2
+  local n="${1:-90}" i s1 s2 c1 c2
   for i in $(seq 1 "$n"); do
     s1="$(docker inspect -f '{{.State.StartedAt}}' onix-bap 2>/dev/null || true)"
     s2="$(docker inspect -f '{{.State.StartedAt}}' onix-bpp 2>/dev/null || true)"
-    if [ -n "$s1" ] && [ -n "$s2" ]        && docker logs --since "$s1" onix-bap 2>&1 | grep -q 'Server listening on :8081'        && docker logs --since "$s2" onix-bpp 2>&1 | grep -q 'Server listening on :8082'; then
-      return 0
+    if [ -n "$s1" ] && [ -n "$s2" ]; then
+      c1="$(docker logs --since "$s1" onix-bap 2>&1 | grep -c 'Server listening on :8081' || true)"
+      c2="$(docker logs --since "$s2" onix-bpp 2>&1 | grep -c 'Server listening on :8082' || true)"
+      if [ "${c1:-0}" -gt 0 ] && [ "${c2:-0}" -gt 0 ]; then return 0; fi
     fi
     sleep 1
   done
