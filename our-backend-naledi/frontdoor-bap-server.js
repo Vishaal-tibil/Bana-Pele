@@ -11,6 +11,12 @@
 
 const http = require('http');
 const crypto = require('crypto');
+const { createLogger } = require('./logger');
+const { openPool } = require('./db');
+
+const log = createLogger(process.env.SERVICE_NAME || 'sandbox-bap');
+const pool = openPool(log);
+log.attachDb(pool);
 
 const PORT = process.env.PORT || 4000;
 const BACKBONE_CALLER = process.env.BACKBONE_CALLER || 'http://localhost:4001/api/webhook';
@@ -19,11 +25,13 @@ const BACKBONE_BASE_URL = process.env.BACKBONE_BASE_URL || 'http://localhost:400
 const DEMO_NALEDI_ID = 'naledi-001';
 let transactionId = crypto.randomUUID();
 let lastDiscoverResult = null; // { providers }
-let log = [];
+// Last few messages, for the built-in demo page only (the persistent log is
+// the structured one, see logger.js).
+let pageLog = [];
 
 function addLog(direction, action, payload) {
-  log.unshift({ time: new Date().toLocaleTimeString(), direction, action, payload });
-  log = log.slice(0, 30);
+  pageLog.unshift({ time: new Date().toLocaleTimeString(), direction, action, payload });
+  pageLog = pageLog.slice(0, 30);
 }
 
 // Identity is configuration, not code: the values below default to the
@@ -117,6 +125,7 @@ function trigger(action, message, txId, opts = {}) {
   }
   const payload = { context, message: outgoingMessage };
   addLog('sent', action, payload);
+  log.message('out', payload, { to: 'onix-bap' });
   const url = `${BACKBONE_CALLER}/${action}`;
   return fetch(url, {
     method: 'POST',
@@ -129,20 +138,22 @@ function trigger(action, message, txId, opts = {}) {
       // signing failure, etc.) would silently look like "it worked"
       // since fetch() doesn't reject on non-2xx statuses.
       const text = await res.text().catch(() => '');
-      console.log(`[frontdoor] ${action} -> onix-bap responded ${res.status}: ${text.slice(0, 500)}`);
-      return { ok: res.ok && !text.includes('"NACK"'), status: res.status, text };
+      const ok = res.ok && !text.includes('"NACK"');
+      log[ok ? 'info' : 'warn']('beckn.ack', { transactionId: context.transactionId, messageId: context.messageId, action, from: 'onix-bap', httpStatus: res.status, ack: ok ? 'ACK' : 'NACK', body: text.slice(0, 2000) });
+      return { ok, status: res.status, text };
     })
     .catch((err) => {
-      console.error('[frontdoor] failed to trigger action:', err.message, '| cause:', err.cause);
+      log.error('beckn.send_failed', { transactionId: context.transactionId, messageId: context.messageId, action, to: 'onix-bap', error: err.message, cause: err.cause && String(err.cause) });
       return { ok: false, status: 0, error: err.message };
     });
 }
 
 // The /v1 REST layer for My Journey's backend (see v1-bap.js).
-const v1 = require('./v1-bap')({ trigger });
+const v1 = require('./v1-bap')({ trigger, log, pool });
 
 function handleCallback(action, incoming) {
   addLog('received', action, incoming);
+  log.message('in', incoming, { from: 'onix-bap' });
   // Callbacks that belong to a /v1 transaction are handled there; anything
   // else is the built-in page's single legacy transaction (below).
   if (v1.onCallback(action, incoming)) return;
@@ -248,11 +259,11 @@ const server = http.createServer((req, res) => {
       .then((backboneState) => {
         const naledi = backboneState.naledis.find((n) => n.id === DEMO_NALEDI_ID);
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ naledi, lastDiscoverResult, log }));
+        res.end(JSON.stringify({ naledi, lastDiscoverResult, log: pageLog }));
       })
       .catch((err) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ naledi: null, lastDiscoverResult, log, error: err.message }));
+        res.end(JSON.stringify({ naledi: null, lastDiscoverResult, log: pageLog, error: err.message }));
       });
     return;
   }
@@ -575,6 +586,35 @@ setInterval(refresh, 2500);
 </script>
 </body>
 </html>`;
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`frontdoor-bap server running on port ${PORT}`);
-});
+// Start listening only once the saved state is loaded.
+v1.ready
+  .then(() => {
+    server.listen(PORT, '0.0.0.0', () => {
+      log.info('server.listening', { port: Number(PORT) });
+      console.log(`frontdoor-bap server running on port ${PORT}`);
+    });
+  })
+  .catch((e) => {
+    log.error('server.start_failed', { error: e.message, stack: e.stack });
+    process.exit(1);
+  });
+
+// On stop (docker stop / restart, a new revision on Azure): finish the last
+// database write and log entries, then exit.
+let stopping = false;
+async function shutdown(signal) {
+  if (stopping) return;
+  stopping = true;
+  log.info('server.stopping', { signal });
+  server.close();
+  try {
+    await v1.flush();
+    await log.flush();
+    if (pool) await pool.end();
+  } catch (e) {
+    log.error('server.stop_failed', { error: e.message });
+  }
+  process.exit(0);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

@@ -32,7 +32,7 @@ else
   rm -rf "$INSTALL_DIR/partner-kit/node_modules"
 fi
 
-SERVICES="redis onix-bap onix-bpp beckn-router sandbox-bap sandbox-bpp edge"
+SERVICES="redis naledi-db onix-bap onix-bpp beckn-router sandbox-bap sandbox-bpp edge"
 [ "$TUNNEL" = 1 ] && SERVICES="$SERVICES tunnel"
 if [ "$REFERENCE" = 1 ]; then
   SERVICES="$SERVICES ref-partner"

@@ -206,6 +206,7 @@ for you (never committed). The main settings:
 | `MATCH_URL` | empty | The partner's `/network/match`. Empty means the built-in providers are used |
 | `EVENTS_URL` | empty | The partner's `/network/events`. Empty means events are only recorded |
 | `BAP_ID`, `BPP_ID`, `NETWORK_ID` | shared sandbox identities | Network identity (keys stay in the adapters' config) |
+| `BAP_DATABASE_URL`, `BPP_DATABASE_URL` | local `naledi-db` container | Each app's PostgreSQL database (Azure: Flexible Server, `?sslmode=require`) |
 
 The full list, including timeouts, is in [docs/INTEGRATION.md](docs/INTEGRATION.md).
 
@@ -217,7 +218,11 @@ The full list, including timeouts, is in [docs/INTEGRATION.md](docs/INTEGRATION.
   key. The built-in pages' open routes, the adapters' webhooks and the adapters
   themselves stay on the internal network.
 - **Nothing is lost on restart.** Searches, needs, pending requests and events
-  waiting to be delivered are saved to disk; a restart of either app carries on.
+  waiting to be delivered are saved in PostgreSQL (one database per app); a
+  restart or crash of either app carries on. See [docs/DATABASE.md](docs/DATABASE.md).
+- **One log per transaction.** Every message in and out and every state change
+  is a JSON log line with its transaction id, in Log Analytics on Azure and in the
+  database. See [docs/LOGGING.md](docs/LOGGING.md).
 - **Events are delivered once or retried.** If the partner is down or slow, we
   retry in order with a growing pause; each event has a unique `eventId` so a
   repeat can be ignored.
