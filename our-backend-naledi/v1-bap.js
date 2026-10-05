@@ -10,6 +10,7 @@
 //   POST /v1/select              request a provider (sends select + init)
 //   POST /v1/confirm             confirm once reserved
 //   GET  /v1/status/{tx}         current status of the whole transaction
+//   GET  /v1/log/{tx}            the transaction's full log, both sides (from the database)
 //   POST /v1/provider/offer      -> provider side (offer to the practitioner)
 //   POST /v1/provider/decision   -> provider side (accept / decline + coach)
 //   POST /v1/provider/complete   -> provider side (mark support delivered)
@@ -20,9 +21,72 @@
 
 'use strict';
 
-const { createStore, createOutbox, send, readJson, checkKey, fetchTimeout, uuid, nowIso } = require('./netlib');
+const { createStore, createOutbox, send, readJson, checkKey, fetchTimeout, uuid, nowIso, OUTBOX_TABLE, outboxMapper } = require('./netlib');
+const { COMMON_SCHEMA } = require('./db');
 
-module.exports = function createV1Bap({ trigger }) {
+// ---- PostgreSQL tables (database naledi_bap) ----
+
+const SCHEMA = [
+  ...COMMON_SCHEMA,
+  `CREATE TABLE IF NOT EXISTS transactions (
+     transaction_id  text PRIMARY KEY,
+     practitioner_id text NOT NULL,
+     need_type       text NOT NULL,
+     region          text NOT NULL DEFAULT '',
+     status          text NOT NULL,
+     order_status    text NOT NULL DEFAULT 'none',
+     need_id         text,
+     provider_id     text,
+     results         jsonb NOT NULL DEFAULT '[]',
+     offers          jsonb NOT NULL DEFAULT '[]',
+     created_at      timestamptz NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS transactions_practitioner ON transactions (practitioner_id)`,
+];
+
+const TABLES = {
+  meta: { pk: 'key', cols: ['key', 'value'], json: ['value'] },
+  transactions: {
+    pk: 'transaction_id',
+    order: 'created_at',
+    cols: ['transaction_id', 'practitioner_id', 'need_type', 'region', 'status', 'order_status', 'need_id', 'provider_id', 'results', 'offers', 'created_at'],
+    json: ['results', 'offers'],
+  },
+  outbox: OUTBOX_TABLE,
+};
+
+function bapDb(pool, log) {
+  const ob = outboxMapper();
+  return {
+    pool, log, name: 'bap', schema: SCHEMA, tables: TABLES,
+    toRows: (S) => ({
+      meta: [{ key: 'epoch', value: S.epoch }],
+      transactions: Object.values(S.transactions).map((tx) => ({
+        transaction_id: tx.transactionId, practitioner_id: tx.practitionerId, need_type: tx.needType,
+        region: tx.region || '', status: tx.status, order_status: tx.order.status, need_id: tx.order.needId,
+        provider_id: tx.order.providerId, results: tx.results, offers: tx.offers, created_at: tx.createdAt,
+      })),
+      outbox: ob.toRows(S.outbox),
+    }),
+    fromRows: (S, rows) => {
+      const epoch = rows.meta.find((r) => r.key === 'epoch');
+      if (epoch) S.epoch = Number(epoch.value);
+      S.transactions = {};
+      for (const r of rows.transactions) {
+        S.transactions[r.transaction_id] = {
+          transactionId: r.transaction_id, practitionerId: r.practitioner_id, needType: r.need_type, region: r.region,
+          createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at, status: r.status,
+          results: r.results || [], offers: r.offers || [],
+          order: { status: r.order_status, needId: r.need_id, providerId: r.provider_id },
+          history: [], // the full history lives in tx_log
+        };
+      }
+      S.outbox = ob.fromRows(rows.outbox);
+    },
+  };
+}
+
+module.exports = function createV1Bap({ trigger, log, pool }) {
   const API_KEY = process.env.API_KEY || 'demo-key-change-me';
   const INTERNAL_KEY = process.env.INTERNAL_KEY || API_KEY;
   const BACKBONE_BASE_URL = process.env.BACKBONE_BASE_URL || 'http://localhost:4001';
@@ -31,16 +95,21 @@ module.exports = function createV1Bap({ trigger }) {
   const STATE_FILE = process.env.STATE_FILE || '';
   const DISCOVER_TTL = process.env.DISCOVER_TTL || undefined;
 
-  const store = createStore(STATE_FILE, { epoch: 1, transactions: {}, outbox: [] });
+  const store = createStore(STATE_FILE, { epoch: 1, transactions: {}, outbox: [] }, pool ? bapDb(pool, log) : null);
   const S = store.state;
-  const outbox = createOutbox({ store, name: 'bap-events', url: EVENTS_URL, key: EVENTS_API_KEY });
+  const outbox = createOutbox({ store, name: 'bap-events', url: EVENTS_URL, key: EVENTS_API_KEY, log });
 
-  if (API_KEY === 'demo-key-change-me') console.warn('[v1] API_KEY not set -- using the demo default. Set API_KEY before exposing this.');
-  console.log(`[v1] buyer API ready (epoch ${S.epoch}, events -> ${EVENTS_URL || 'recorded only'})`);
+  if (API_KEY === 'demo-key-change-me') log.warn('config.demo_api_key', { message: 'API_KEY not set -- using the demo default. Set API_KEY before exposing this.' });
+  const ready = store.ready.then(() => {
+    log.info('v1.ready', { epoch: S.epoch, transactions: Object.keys(S.transactions).length, events: EVENTS_URL || 'recorded only', storage: pool ? 'postgres' : STATE_FILE ? 'file' : 'memory' });
+  });
 
+  // A state change on a transaction: kept on the transaction (short, in
+  // memory) and written to the structured log (persistent, see logger.js).
   function note(tx, text, data) {
     tx.history.push({ at: nowIso(), text, ...(data ? { data } : {}) });
     if (tx.history.length > 100) tx.history.shift();
+    log.info('tx.state', { transactionId: tx.transactionId, text, status: tx.status, orderStatus: tx.order.status, ...(data ? { data } : {}) });
   }
 
   function emit(event, tx, extra = {}) {
@@ -72,8 +141,14 @@ module.exports = function createV1Bap({ trigger }) {
 
   function handle(req, res, path) {
     if (path !== '/v1' && !path.startsWith('/v1/')) return false;
+    const started = Date.now();
+    res.on('finish', () => {
+      if (path === '/v1/health') return;
+      const m = path.match(/^\/v1\/(?:results|status|log)\/([^/]+)$/);
+      log.info('api.request', { transactionId: m ? m[1] : res.txId, method: req.method, path, status: res.statusCode, ms: Date.now() - started });
+    });
     route(req, res, path).catch((e) => {
-      console.error('[v1] error:', e);
+      log.error('api.error', { path, error: e.message, stack: e.stack });
       const bad = /invalid JSON|too large/.test(e.message);
       send(res, bad ? 400 : 500, { error: bad ? 'invalid_request' : 'internal_error', message: e.message });
     });
@@ -100,6 +175,7 @@ module.exports = function createV1Bap({ trigger }) {
     if (providerMatch) {
       if (req.method !== 'POST') return send(res, 405, { error: 'method_not_allowed' });
       const body = await readJson(req);
+      res.txId = body.transactionId;
       let r;
       try {
         r = await fetchTimeout(
@@ -122,6 +198,7 @@ module.exports = function createV1Bap({ trigger }) {
         return send(res, 400, { error: 'invalid_request', message: 'practitionerId and needType are required' });
       }
       const transactionId = uuid();
+      res.txId = transactionId;
       const tx = {
         transactionId,
         practitionerId: String(b.practitionerId),
@@ -161,6 +238,20 @@ module.exports = function createV1Bap({ trigger }) {
     }
 
     const txGet = path.match(/^\/v1\/(results|status|log)\/([^/]+)$/);
+    if (req.method === 'GET' && txGet && txGet[1] === 'log' && pool) {
+      // Persistent log: our own entries plus the provider side's, in time order.
+      const mine = await log.readTx(txGet[2]);
+      let theirs = [];
+      try {
+        const r = await fetchTimeout(`${BACKBONE_BASE_URL}/internal/log/${encodeURIComponent(txGet[2])}`, { headers: { 'x-internal-key': INTERNAL_KEY } }, 5000);
+        if (r.ok) theirs = await r.json();
+      } catch (e) {
+        log.warn('log.provider_side_unavailable', { transactionId: txGet[2], error: e.message });
+      }
+      const all = [...mine, ...(Array.isArray(theirs) ? theirs : [])].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+      if (!all.length && !S.transactions[txGet[2]]) return send(res, 404, { error: 'unknown_transaction' });
+      return send(res, 200, all);
+    }
     if (req.method === 'GET' && txGet) {
       const tx = S.transactions[txGet[2]];
       if (!tx) return send(res, 404, { error: 'unknown_transaction' });
@@ -173,6 +264,7 @@ module.exports = function createV1Bap({ trigger }) {
 
     if (req.method === 'POST' && path === '/v1/select') {
       const b = await readJson(req);
+      res.txId = b.transactionId;
       if (!b.transactionId || !b.practitionerId || !b.needType || !b.providerId) {
         return send(res, 400, { error: 'invalid_request', message: 'transactionId, practitionerId, needType and providerId are required' });
       }
@@ -200,6 +292,7 @@ module.exports = function createV1Bap({ trigger }) {
 
     if (req.method === 'POST' && path === '/v1/confirm') {
       const b = await readJson(req);
+      res.txId = b.transactionId;
       if (!b.transactionId) return send(res, 400, { error: 'invalid_request', message: 'transactionId is required' });
       const tx = S.transactions[b.transactionId];
       if (!tx) return send(res, 404, { error: 'unknown_transaction' });
@@ -227,6 +320,7 @@ module.exports = function createV1Bap({ trigger }) {
       S.outbox = [];
       S.epoch += 1;
       store.save();
+      log.info('admin.reset', { epoch: S.epoch });
       let providerSide = 'ok';
       try {
         const r = await fetchTimeout(
@@ -295,5 +389,5 @@ module.exports = function createV1Bap({ trigger }) {
     return true;
   }
 
-  return { handle, onCallback };
+  return { handle, onCallback, ready, flush: store.flush };
 };

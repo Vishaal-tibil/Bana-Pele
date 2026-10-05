@@ -23,6 +23,10 @@ response to Naledi's own signup:
 6. When the support is completed, you call me to confirm, and again with the
    final decision. The network marks it fulfilled.
 
+The exact request and response formats are also in machine-readable form:
+[api/v1-openapi.yaml](api/v1-openapi.yaml) (OpenAPI 3; it opens in Swagger
+Editor or Postman).
+
 ## Address and key
 
 - Base URL: `https://<address I send you>` (paths below start with `/v1`).
@@ -37,6 +41,7 @@ response to Naledi's own signup:
 | `POST /v1/search` | Naledi signs up | `{ practitionerId, needType, region, tier, children }` | `202 { transactionId, status: "searching" }` |
 | `GET /v1/results/{transactionId}` | any time | none | providers found and offers received |
 | `GET /v1/status/{transactionId}` | any time | none | current status and details |
+| `GET /v1/log/{transactionId}` | support / debugging | none | every message and state change on both sides, in time order |
 | `POST /v1/provider/offer` | WeHelp clicks Send Offer | `{ transactionId, providerId, title, area, note, offerId }` (send **your own** offer id) | `200 { offerId, status: "sent" }` |
 | `POST /v1/select` | Naledi accepts the offer | `{ transactionId, practitionerId, needType, providerId }` | `202 { status: "pending" }` |
 | `POST /v1/provider/decision` | WeHelp accepts or declines (and assigns a coach) | `{ transactionId, decision: "accept" or "decline", coachId }` | `200 { needStatus }` |

@@ -23,6 +23,12 @@
 
 const http = require('http');
 const crypto = require('crypto');
+const { createLogger } = require('./logger');
+const { openPool } = require('./db');
+
+const log = createLogger(process.env.SERVICE_NAME || 'sandbox-bpp');
+const pool = openPool(log);
+log.attachDb(pool);
 
 const PORT = process.env.PORT || 4001;
 // Same "direct mode" pattern as course-bpp-server.js -- see that file's
@@ -124,7 +130,8 @@ function providersMatching(needType, region) {
 // tell when the adapter refused the message (schema or signing failure).
 function sendCallback(callback) {
   const url = `${ONIX_CALLER}/${callback.context.action}`;
-  console.log(`[backbone] attempting hand-off to: ${url}`);
+  const c = callback.context;
+  log.message('out', callback, { to: 'onix-bpp' });
   return fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -133,11 +140,11 @@ function sendCallback(callback) {
     .then(async (res) => {
       const text = await res.text().catch(() => '');
       const ok = res.ok && !text.includes('"NACK"');
-      console.log(`[backbone] handed off ${callback.context.action} -- status ${res.status}${ok ? '' : ' ' + text.slice(0, 400)}`);
+      log[ok ? 'info' : 'warn']('beckn.ack', { transactionId: c.transactionId, messageId: c.messageId, action: c.action, from: 'onix-bpp', httpStatus: res.status, ack: ok ? 'ACK' : 'NACK', body: text.slice(0, 2000) });
       return { ok, status: res.status, text };
     })
     .catch((err) => {
-      console.error('[backbone] failed to hand off callback:', err.message, '| cause:', err.cause);
+      log.error('beckn.send_failed', { transactionId: c.transactionId, messageId: c.messageId, action: c.action, to: 'onix-bpp', error: err.message, cause: err.cause && String(err.cause) });
       return { ok: false, status: 0, error: err.message };
     });
 }
@@ -145,7 +152,7 @@ function sendCallback(callback) {
 // Answers a select/confirm straight away with REJECTED (used when the need is
 // unknown, already reserved by someone else, or not in a state that allows it).
 function rejectNow(context, needId, providerId, action) {
-  console.log(`[backbone] rejecting ${action === 'on_init' ? 'select' : 'confirm'} for ${needId} -- ${action}/REJECTED`);
+  log.info('request.rejected', { transactionId: context.transactionId, needId, providerId, stage: action === 'on_init' ? 'select' : 'confirm', reason: 'need not available' });
   return sendCallback({
     context: { ...context, action, timestamp: new Date().toISOString() },
     message: { contract: buildContractResponse(needId, providerId, 'REJECTED') },
@@ -154,12 +161,16 @@ function rejectNow(context, needId, providerId, action) {
 
 // Provider-side layer for the My Journey integration (see v1-bpp.js).
 const v1 = require('./v1-bpp')({
+  log, pool,
   providers, naledis, needs, pendingRequests, NEED_TYPES,
   seed, sendCallback, providersMatching,
   resolvePending: (pendingId, approved) => resolvePending(pendingId, approved),
 });
-v1.restore(); // if a saved state exists, it replaces the freshly seeded data
-v1.persist();
+// Loaded before the server starts listening (see the bottom of this file).
+const started = v1.ready.then(() => {
+  v1.restore(); // if a saved state exists, it replaces the freshly seeded data
+  v1.persist();
+});
 
 // ---- HTTP server ----
 
@@ -247,6 +258,7 @@ const server = http.createServer((req, res) => {
         res.end('Invalid JSON');
         return;
       }
+      log.message('in', incoming, { from: 'onix-bpp' });
       handleAction(action, incoming);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ message: { ack: { status: 'ACK' } } }));
@@ -304,7 +316,7 @@ function handleAction(action, incoming) {
     // configured) goes through the /v1 path: partner match lookup, per-search
     // record, "practitioner.matched" event.
     if (decoded.practitionerId || v1.delegated) {
-      v1.handleDiscover(context, { ...decoded, needType, region }).catch((e) => console.error('[backbone] discover failed:', e));
+      v1.handleDiscover(context, { ...decoded, needType, region }).catch((e) => log.error('discover.failed', { transactionId: context.transactionId, error: e.message, stack: e.stack }));
       return;
     }
     const matches = providersMatching(needType, region);
@@ -441,6 +453,9 @@ function resolvePending(pendingId, approved) {
   const need = needs.get(pending.needId);
   if (!need) return;
 
+  const before = need.status;
+  const logStatus = () =>
+    log.info('need.status_changed', { transactionId: pending.context && pending.context.transactionId, needId: pending.needId, providerId: pending.providerId, stage: pending.action, approved, from: before, to: need.status });
   if (pending.action === 'init') {
     // reserve or reject-and-reopen
     need.status = approved ? 'reserved' : 'open';
@@ -449,6 +464,7 @@ function resolvePending(pendingId, approved) {
       context: { ...pending.context, action: 'on_init', timestamp: new Date().toISOString() },
       message: { contract: buildContractResponse(pending.needId, pending.providerId, approved ? 'ACTIVE' : 'REJECTED') },
     };
+    logStatus();
     sendCallback(callback);
   } else if (pending.action === 'confirm') {
     need.status = approved ? 'fulfilled' : 'reserved'; // rejected completion stays reserved
@@ -457,6 +473,7 @@ function resolvePending(pendingId, approved) {
       context: { ...pending.context, action: 'on_confirm', timestamp: new Date().toISOString() },
       message: { contract: buildContractResponse(pending.needId, pending.providerId, approved ? 'COMPLETED' : 'REJECTED') },
     };
+    logStatus();
     sendCallback(callback);
   }
 }
@@ -570,6 +587,34 @@ setInterval(refresh, 2000);
 </body>
 </html>`;
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`backbone-bpp server running on port ${PORT}`);
-});
+started
+  .then(() => {
+    server.listen(PORT, '0.0.0.0', () => {
+      log.info('server.listening', { port: Number(PORT) });
+      console.log(`backbone-bpp server running on port ${PORT}`);
+    });
+  })
+  .catch((e) => {
+    log.error('server.start_failed', { error: e.message, stack: e.stack });
+    process.exit(1);
+  });
+
+// On stop: finish the last database write and log entries, then exit.
+let stopping = false;
+async function shutdown(signal) {
+  if (stopping) return;
+  stopping = true;
+  log.info('server.stopping', { signal });
+  server.close();
+  try {
+    v1.persist();
+    await v1.flush();
+    await log.flush();
+    if (pool) await pool.end();
+  } catch (e) {
+    log.error('server.stop_failed', { error: e.message });
+  }
+  process.exit(0);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

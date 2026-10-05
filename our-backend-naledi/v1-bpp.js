@@ -15,13 +15,143 @@
 //
 // Internal endpoints (header x-internal-key):
 //   POST /internal/offer      POST /internal/decision   POST /internal/complete
-//   POST /internal/reset      GET  /internal/state
+//   POST /internal/reset      GET  /internal/state      GET /internal/log/{tx}
 
 'use strict';
 
-const { createStore, createOutbox, send, readJson, checkKey, fetchTimeout, uuid, nowIso } = require('./netlib');
+const { createStore, createOutbox, send, readJson, checkKey, fetchTimeout, uuid, nowIso, OUTBOX_TABLE, outboxMapper } = require('./netlib');
+const { COMMON_SCHEMA } = require('./db');
+
+// ---- PostgreSQL tables (database naledi_bpp) ----
+
+const SCHEMA = [
+  ...COMMON_SCHEMA,
+  // The provider directory (Impande, GROW, WeHelp, SmartStart, the Thabos ...).
+  `CREATE TABLE IF NOT EXISTS providers (
+     id                 text PRIMARY KEY,
+     name               text NOT NULL,
+     kind               text NOT NULL,
+     need_types_covered jsonb NOT NULL DEFAULT '[]',
+     region             text,
+     coverage           jsonb,
+     capacity           text,
+     description        text,
+     extra              jsonb NOT NULL DEFAULT '{}'
+   )`,
+  `CREATE TABLE IF NOT EXISTS naledis (
+     id       text PRIMARY KEY,
+     name     text NOT NULL,
+     region   text,
+     need_ids jsonb NOT NULL DEFAULT '[]'
+   )`,
+  // One need per practitioner + need type; status open -> reserved -> fulfilled.
+  `CREATE TABLE IF NOT EXISTS needs (
+     id          text PRIMARY KEY,
+     naledi_id   text NOT NULL,
+     type        text NOT NULL,
+     status      text NOT NULL,
+     provider_id text,
+     coach_id    text,
+     note        text NOT NULL DEFAULT '',
+     extra       jsonb NOT NULL DEFAULT '{}'
+   )`,
+  `CREATE INDEX IF NOT EXISTS needs_naledi ON needs (naledi_id)`,
+  // Requests waiting for a provider's decision (select/init or confirm).
+  `CREATE TABLE IF NOT EXISTS pending_requests (
+     id          text PRIMARY KEY,
+     seq         integer NOT NULL,
+     action      text NOT NULL,
+     need_id     text,
+     provider_id text,
+     context     jsonb NOT NULL,
+     message     jsonb NOT NULL
+   )`,
+  // What the provider side knows about each search (who matched, offers sent).
+  `CREATE TABLE IF NOT EXISTS tx_meta (
+     transaction_id   text PRIMARY KEY,
+     practitioner_id  text,
+     need_type        text,
+     region           text,
+     provider_ids     jsonb NOT NULL DEFAULT '[]',
+     discover_context jsonb,
+     match_error      text,
+     offers           jsonb NOT NULL DEFAULT '[]',
+     created_at       timestamptz NOT NULL
+   )`,
+];
+
+const TABLES = {
+  meta: { pk: 'key', cols: ['key', 'value'], json: ['value'] },
+  providers: { pk: 'id', order: 'id', cols: ['id', 'name', 'kind', 'need_types_covered', 'region', 'coverage', 'capacity', 'description', 'extra'], json: ['need_types_covered', 'coverage', 'extra'] },
+  naledis: { pk: 'id', order: 'id', cols: ['id', 'name', 'region', 'need_ids'], json: ['need_ids'] },
+  needs: { pk: 'id', order: 'id', cols: ['id', 'naledi_id', 'type', 'status', 'provider_id', 'coach_id', 'note', 'extra'], json: ['extra'] },
+  pending_requests: { pk: 'id', order: 'seq', cols: ['id', 'seq', 'action', 'need_id', 'provider_id', 'context', 'message'], json: ['context', 'message'] },
+  tx_meta: { pk: 'transaction_id', order: 'created_at', cols: ['transaction_id', 'practitioner_id', 'need_type', 'region', 'provider_ids', 'discover_context', 'match_error', 'offers', 'created_at'], json: ['provider_ids', 'discover_context', 'offers'] },
+  outbox: OUTBOX_TABLE,
+};
+
+const pick = (o, known) => Object.fromEntries(Object.entries(o).filter(([key]) => !known.includes(key)));
+const iso = (v) => (v instanceof Date ? v.toISOString() : v);
+
+function bppDb(pool, log) {
+  const ob = outboxMapper();
+  return {
+    pool, log, name: 'bpp', schema: SCHEMA, tables: TABLES,
+    toRows: (S) => {
+      const snap = S.snapshot || { naledis: [], needs: [], providers: [], pending: [] };
+      return {
+        meta: [{ key: 'epoch', value: S.epoch }, { key: 'snapshot', value: !!S.snapshot }],
+        providers: snap.providers.map((p) => ({
+          id: p.id, name: p.name || p.id, kind: p.kind || 'NGO', need_types_covered: p.needTypesCovered || [], region: p.region,
+          coverage: p.coverage || null, capacity: p.capacity, description: p.description,
+          extra: pick(p, ['id', 'name', 'kind', 'needTypesCovered', 'region', 'coverage', 'capacity', 'description']),
+        })),
+        naledis: snap.naledis.map((n) => ({ id: n.id, name: n.name || n.id, region: n.region, need_ids: n.needIds || [] })),
+        needs: snap.needs.map((n) => ({
+          id: n.id, naledi_id: n.naledisId || '', type: n.type || '', status: n.status || 'open', provider_id: n.providerId, coach_id: n.coachId || null,
+          note: n.note || '', extra: pick(n, ['id', 'naledisId', 'type', 'status', 'providerId', 'coachId', 'note']),
+        })),
+        pending_requests: snap.pending.map((p, i) => ({
+          id: p.id, seq: i, action: p.action || '', need_id: p.needId, provider_id: p.providerId, context: p.context || {}, message: p.message || {},
+        })),
+        tx_meta: Object.entries(S.txMeta).map(([tx, m]) => ({
+          transaction_id: tx, practitioner_id: m.practitionerId, need_type: m.needType, region: m.region, provider_ids: m.providerIds || [],
+          discover_context: m.discoverContext || null, match_error: m.matchError || null, offers: m.offers || [], created_at: m.createdAt,
+        })),
+        outbox: ob.toRows(S.outbox),
+      };
+    },
+    fromRows: (S, rows) => {
+      const meta = Object.fromEntries(rows.meta.map((r) => [r.key, r.value]));
+      if (meta.epoch !== undefined) S.epoch = Number(meta.epoch);
+      S.snapshot = meta.snapshot
+        ? {
+            providers: rows.providers.map((r) => ({
+              ...(r.extra || {}), id: r.id, name: r.name, kind: r.kind, needTypesCovered: r.need_types_covered || [], region: r.region,
+              ...(r.coverage ? { coverage: r.coverage } : {}), capacity: r.capacity, description: r.description,
+            })),
+            naledis: rows.naledis.map((r) => ({ id: r.id, name: r.name, region: r.region, needIds: r.need_ids || [] })),
+            needs: rows.needs.map((r) => ({
+              ...(r.extra || {}), id: r.id, naledisId: r.naledi_id, type: r.type, status: r.status, providerId: r.provider_id,
+              note: r.note, ...(r.coach_id ? { coachId: r.coach_id } : {}),
+            })),
+            pending: rows.pending_requests.map((r) => ({ id: r.id, action: r.action, context: r.context, message: r.message, needId: r.need_id, providerId: r.provider_id })),
+          }
+        : null;
+      S.txMeta = {};
+      for (const r of rows.tx_meta) {
+        S.txMeta[r.transaction_id] = {
+          practitionerId: r.practitioner_id, needType: r.need_type, region: r.region, providerIds: r.provider_ids || [],
+          discoverContext: r.discover_context, matchError: r.match_error, offers: r.offers || [], createdAt: iso(r.created_at),
+        };
+      }
+      S.outbox = ob.fromRows(rows.outbox);
+    },
+  };
+}
 
 module.exports = function createV1Bpp(k) {
+  const { log, pool } = k;
   const API_KEY = process.env.API_KEY || 'demo-key-change-me';
   const INTERNAL_KEY = process.env.INTERNAL_KEY || API_KEY;
   const MATCH_URL = process.env.MATCH_URL || '';
@@ -35,9 +165,9 @@ module.exports = function createV1Bpp(k) {
   const STATE_FILE = process.env.STATE_FILE || '';
   const WAIT_FOR_REQUEST_MS = Number(process.env.WAIT_FOR_REQUEST_MS || 4000);
 
-  const store = createStore(STATE_FILE, { epoch: 1, txMeta: {}, snapshot: null, outbox: [] });
+  const store = createStore(STATE_FILE, { epoch: 1, txMeta: {}, snapshot: null, outbox: [] }, pool ? bppDb(pool, log) : null);
   const S = store.state;
-  const outbox = createOutbox({ store, name: 'bpp-events', url: EVENTS_URL, key: EVENTS_API_KEY });
+  const outbox = createOutbox({ store, name: 'bpp-events', url: EVENTS_URL, key: EVENTS_API_KEY, log });
 
   // ---- persistence of the legacy in-memory maps ----
 
@@ -62,7 +192,7 @@ module.exports = function createV1Bpp(k) {
     snap.needs.forEach((n) => k.needs.set(n.id, n));
     snap.providers.forEach((p) => k.providers.set(p.id, p));
     snap.pending.forEach((p) => k.pendingRequests.push(p));
-    console.log(`[v1-bpp] restored ${snap.needs.length} needs, ${snap.pending.length} pending request(s), ${snap.providers.length} providers`);
+    log.info('store.restored', { needs: snap.needs.length, pending: snap.pending.length, providers: snap.providers.length, epoch: S.epoch });
     return true;
   }
 
@@ -82,6 +212,7 @@ module.exports = function createV1Bpp(k) {
     }
     k.needs.set(needId, { id: needId, naledisId: practitionerId, type, status: 'open', providerId: null, note: '' });
     naledi.needIds.push(needId);
+    log.info('need.created', { needId, practitionerId, needType: type, status: 'open' });
   }
 
   // ---- events to the partner ----
@@ -136,7 +267,7 @@ module.exports = function createV1Bpp(k) {
         matches = (Array.isArray(body.matches) ? body.matches : []).filter((m) => m && m.providerId);
       } catch (e) {
         matchError = e.message;
-        console.error(`[v1-bpp] match lookup failed (${e.message}) -- answering with no matches`);
+        log.warn('match.lookup_failed', { transactionId: tx, url: MATCH_URL, error: e.message });
       }
     } else {
       matches = k
@@ -144,6 +275,7 @@ module.exports = function createV1Bpp(k) {
         .map((p) => ({ providerId: p.id, name: p.name, kind: p.kind, description: p.description, region: p.region, reasons: ['local match'] }));
     }
 
+    log.info('match.result', { transactionId: tx, needType: decoded.needType, region: decoded.region, source: MATCH_URL ? 'partner' : 'local', providerIds: matches.map((m) => m.providerId), error: matchError || undefined });
     S.txMeta[tx] = {
       practitionerId: decoded.practitionerId || null,
       needType: decoded.needType || null,
@@ -195,7 +327,7 @@ module.exports = function createV1Bpp(k) {
   function handle(req, res, path) {
     if (!path.startsWith('/internal/')) return false;
     route(req, res, path).catch((e) => {
-      console.error('[v1-bpp] error:', e);
+      log.error('internal.error', { path, error: e.message, stack: e.stack });
       const bad = /invalid JSON|too large/.test(e.message);
       send(res, bad ? 400 : 500, { error: bad ? 'invalid_request' : 'internal_error', message: e.message });
     });
@@ -211,6 +343,11 @@ module.exports = function createV1Bpp(k) {
       return send(res, 200, { epoch: S.epoch, txMeta: S.txMeta, pending: k.pendingRequests, needs: [...k.needs.values()], outbox: outbox.list() });
     }
 
+    const logMatch = path.match(/^\/internal\/log\/([^/]+)$/);
+    if (req.method === 'GET' && logMatch) {
+      return send(res, 200, (await log.readTx(decodeURIComponent(logMatch[1]))) || []);
+    }
+
     if (req.method === 'POST' && path === '/internal/reset') {
       k.naledis.clear();
       k.needs.clear();
@@ -221,6 +358,7 @@ module.exports = function createV1Bpp(k) {
       S.outbox = [];
       S.epoch += 1;
       persist();
+      log.info('admin.reset', { epoch: S.epoch });
       return send(res, 200, { epoch: S.epoch });
     }
 
@@ -250,6 +388,7 @@ module.exports = function createV1Bpp(k) {
       const approve = decision === 'accept';
       const need = k.needs.get(p.needId);
       if (approve && b.coachId && need) need.coachId = b.coachId;
+      log.info('provider.decision', { transactionId: b.transactionId, needId: p.needId, stage, decision, coachId: b.coachId || undefined });
       k.resolvePending(p.id, approve);
       persist();
       const after = k.needs.get(p.needId);
@@ -295,11 +434,12 @@ module.exports = function createV1Bpp(k) {
       }
       meta.offers.push(offerId);
       persist();
+      log.info('offer.sent', { transactionId: b.transactionId, offerId, providerId: b.providerId, title: b.title });
       return send(res, 200, { offerId, status: 'sent' });
     }
 
     return send(res, 404, { error: 'not_found' });
   }
 
-  return { handle, handleDiscover, ensureNeed, onQueued, persist, restore, delegated: !!MATCH_URL };
+  return { handle, handleDiscover, ensureNeed, onQueued, persist, restore, delegated: !!MATCH_URL, ready: store.ready, flush: store.flush };
 };

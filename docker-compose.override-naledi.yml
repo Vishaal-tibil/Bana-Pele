@@ -18,6 +18,11 @@
 # To test our side without the partner, start the stand-in as well:
 #   docker compose -f docker-compose-generic.yml -f docker-compose.override-naledi.yml --profile test up --build -d
 #
+# State lives in PostgreSQL (container naledi-db, one database per app). To use
+# a managed server instead (Azure), set BAP_DATABASE_URL / BPP_DATABASE_URL,
+# e.g. postgres://user:pass@host:5432/naledi_bap?sslmode=require
+# Logs: every app writes one JSON line per event to stdout (see logger.js).
+#
 # IMPORTANT: overriding "environment" as a list REPLACES the base file's list
 # entirely rather than merging -- so PORT is repeated here explicitly.
 
@@ -40,13 +45,16 @@ services:
       - EVENTS_URL=${EVENTS_URL:-}
       - EVENTS_API_KEY=${EVENTS_API_KEY:-}
       - DISCOVER_TTL=${DISCOVER_TTL:-}
-      - STATE_FILE=/data/bap-state.json
+      - DATABASE_URL=${BAP_DATABASE_URL:-postgres://naledi:naledi-local-only@naledi-db:5432/naledi_bap}
+      - PG_POOL_MAX=${PG_POOL_MAX:-3}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
       # Network identity (defaults are the starter kit's shared sandbox identities).
       - BAP_ID=${BAP_ID:-bap.example.com}
       - BPP_ID=${BPP_ID:-bpp.example.com}
       - NETWORK_ID=${NETWORK_ID:-beckn.one/testnet}
-    volumes:
-      - naledi_state:/data
+    depends_on:
+      naledi-db:
+        condition: service_healthy
     healthcheck:
       # 127.0.0.1, not localhost: in this image "localhost" resolves to IPv6
       # first, and the server listens on IPv4 only.
@@ -70,11 +78,33 @@ services:
       - EVENTS_URL=${EVENTS_URL:-}
       - EVENTS_API_KEY=${EVENTS_API_KEY:-}
       - OFFER_MESSAGE_ID=${OFFER_MESSAGE_ID:-new}
-      - STATE_FILE=/data/bpp-state.json
-    volumes:
-      - naledi_state:/data
+      - DATABASE_URL=${BPP_DATABASE_URL:-postgres://naledi:naledi-local-only@naledi-db:5432/naledi_bpp}
+      - PG_POOL_MAX=${PG_POOL_MAX:-3}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    depends_on:
+      naledi-db:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3002/api/health"]
+
+  # State for both apps (local runs). Internal network only, never published.
+  naledi-db:
+    image: postgres:16-alpine
+    container_name: naledi-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=naledi
+      - POSTGRES_PASSWORD=naledi-local-only
+    volumes:
+      - naledi_pg:/var/lib/postgresql/data
+      - ./our-backend-naledi/db-init.sql:/docker-entrypoint-initdb.d/01-databases.sql:ro
+    networks:
+      - beckn_network
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "naledi", "-d", "naledi_bpp"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
 
   # The only door to the internet: exposes /v1/* (the partner API) and nothing
   # else. Tunnel port 3010, never 3001/3002/8081/8082/9000.
@@ -153,4 +183,4 @@ services:
       retries: 5
 
 volumes:
-  naledi_state:
+  naledi_pg:

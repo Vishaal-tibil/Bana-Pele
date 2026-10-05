@@ -393,7 +393,11 @@ async function waitHealthy(timeout = 45000) {
   const allowed = new Set(['http://onix-bpp:8082', 'http://onix-bap:8081', 'http://sandbox-bap:3001', 'http://sandbox-bpp:3002']);
   check('every message was forwarded inside our own network only', hosts.size > 0 && [...hosts].every((h) => allowed.has(h)), [...hosts]);
   for (const action of ['discover', 'on_discover', 'select', 'init', 'on_init', 'confirm', 'on_confirm']) {
-    const found = both.split('\n').some((l) => l.includes(a1.tx) && l.includes(`action=\\"${action}\\"`));
+    // Older adapter images log `stepCtx: ... action="discover"`; newer ones dropped the
+    // action from that line, but still log `Validating action: discover` per step.
+    const found = both.split('\n').some(
+      (l) => l.includes(a1.tx) && (l.includes(`action=\\"${action}\\"`) || l.includes(`Validating action: ${action}"`))
+    );
     check(`adapter logs show "${action}" for Naledi's transaction`, found);
   }
   const rc = docker(['inspect', '-f', '{{.RestartCount}}', 'onix-bap', 'onix-bpp']).trim().split(/\s+/);

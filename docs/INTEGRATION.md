@@ -55,8 +55,10 @@ partner backend (Cloud Run)
 - `sandbox-bpp` = `backbone-bpp-server.js` + `v1-bpp.js`: asks the partner who
   matches, guards needs against double reservation, sends offers, applies the
   partner's decisions.
-- `netlib.js`: state file, event outbox (ordered, retried, survives restarts),
-  HTTP helpers.
+- `netlib.js`: the state store, event outbox (ordered, retried, survives restarts),
+  HTTP helpers. `db.js`: PostgreSQL (see [DATABASE.md](DATABASE.md)).
+  `logger.js`: structured JSON logs (see [LOGGING.md](LOGGING.md)).
+- `naledi-db` (PostgreSQL 16, internal only): databases `naledi_bap` and `naledi_bpp`.
 - `edge` (Caddy, port 3010, loopback only): the only thing to tunnel. It passes
   `/v1/*` to the buyer app and answers 404 to everything else, so the built-in
   page's open routes, the adapter webhook and the adapters stay internal.
@@ -87,12 +89,20 @@ variables (also settable in the shell for a single run):
 | `OFFER_MESSAGE_ID` | `new` | fresh message id for offers (`reuse` also works) |
 | `DISCOVER_TTL` | `PT30S` | TTL on the search context |
 | `BAP_ID`, `BPP_ID`, `NETWORK_ID` | sandbox identities | identity is config; keys stay in the adapters' yaml |
+| `BAP_DATABASE_URL`, `BPP_DATABASE_URL` | the local `naledi-db` | each app's PostgreSQL database (`DATABASE_URL` inside the container) |
+| `PG_POOL_MAX` | 3 | database connections per app |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
 ## State
 
-- Buyer: `/data/bap-state.json`; provider: `/data/bpp-state.json` (Docker volume
-  `naledi_state`). They hold searches, needs, pending requests and the
-  undelivered-event queue, and survive `docker restart` and `./stop.sh` / `./start.sh`.
+- PostgreSQL, one database per app: `naledi_bap` (searches, outbox) and
+  `naledi_bpp` (provider directory, needs, pending requests, outbox). They
+  survive `docker restart`, a hard crash, and `./stop.sh` / `./start.sh`.
+  Tables, settings and the Azure steps are in [DATABASE.md](DATABASE.md).
+- Without `DATABASE_URL` the apps fall back to the old JSON file (`STATE_FILE`).
+- Every message in and out and every state change is logged as JSON, per
+  transaction ([LOGGING.md](LOGGING.md)). `GET /v1/log/{transactionId}` returns
+  both sides' entries from the database.
 - `POST /v1/admin/reset` wipes both sides and bumps the epoch.
 
 ## Verification (from our side)

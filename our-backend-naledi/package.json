@@ -1,0 +1,13 @@
+{
+  "name": "naledi-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Naledi buyer (sandbox-bap) and provider (sandbox-bpp) apps",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
+  }
+}
