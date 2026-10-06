@@ -102,7 +102,7 @@ function trigger(action, message, txId, opts = {}) {
       ],
     };
   }
-  const STATUS_FOR_ACTION = { select: 'DRAFT', init: 'ACTIVE', confirm: 'COMPLETED' };
+  const STATUS_FOR_ACTION = { select: 'DRAFT', init: 'ACTIVE', confirm: 'COMPLETED', cancel: 'CANCELLED' };
   let outgoingMessage;
   if (action === 'discover') {
     // practitionerId / tier / children are undefined for the built-in page and
@@ -115,6 +115,8 @@ function trigger(action, message, txId, opts = {}) {
           practitionerId: message.practitionerId,
           tier: message.tier,
           children: message.children,
+          title: message.title,
+          description: message.description,
         }),
       },
     };

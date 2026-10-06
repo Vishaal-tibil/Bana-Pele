@@ -373,7 +373,7 @@ function handleAction(action, incoming) {
     // Server-side duplicate protection: a need that is already reserved or
     // fulfilled, or that another request is already waiting on, cannot be
     // taken again. (Approve/reject is the only thing that changes it.)
-    if (need.status !== 'open' || pendingRequests.some((p) => p.needId === needId)) {
+    if (!['open', 'withdrawn'].includes(need.status) || pendingRequests.some((p) => p.needId === needId)) {
       rejectNow(context, needId, providerId, 'on_init');
       return;
     }
@@ -403,6 +403,36 @@ function handleAction(action, incoming) {
       pending.context = context;
       v1.onQueued(pending);
     }
+    return;
+  }
+
+  if (action === 'cancel') {
+    // The practitioner withdraws: drop what this transaction is waiting on and
+    // release the need, unless the support was already delivered.
+    const { needId, providerId } = extractFromContract(message);
+    const need = needs.get(needId);
+    const txId = context.transactionId;
+    const reply = (code) => sendCallback({
+      context: { ...context, action: 'on_cancel', timestamp: new Date().toISOString() },
+      message: { contract: buildContractResponse(needId, providerId, code) },
+    });
+    const waiting = pendingRequests.filter((p) => p.needId === needId && p.context && p.context.transactionId === txId);
+    const holds = need && need.providerId === providerId && need.status === 'reserved' && need.transactionId === txId;
+    if (!need || need.status === 'fulfilled' || (!waiting.length && !holds)) {
+      log.info('request.withdraw_refused', { transactionId: txId, needId, providerId, status: need ? need.status : null });
+      reply('REJECTED');
+      return;
+    }
+    for (const p of waiting) pendingRequests.splice(pendingRequests.indexOf(p), 1);
+    const before = need.status;
+    need.status = 'withdrawn';
+    need.providerId = null;
+    need.coachId = null;
+    need.transactionId = txId;
+    need.updatedAt = new Date().toISOString();
+    log.info('need.status_changed', { transactionId: txId, needId, providerId, stage: 'cancel', from: before, to: 'withdrawn' });
+    v1.onWithdrawn(need, before, providerId, txId);
+    reply('CANCELLED');
     return;
   }
 
