@@ -79,6 +79,10 @@ const OUTBOX_TABLE = {
   json: ['payload'],
 };
 
+// Same table shape plus a `target` column: one queue that delivers to many
+// webhooks (the NGO subscriptions), each target in its own order.
+const TARGETED_OUTBOX_TABLE = { ...OUTBOX_TABLE, cols: [...OUTBOX_TABLE.cols, 'target'] };
+
 function outboxMapper() {
   const seqOf = new WeakMap();
   let next = 0;
@@ -91,6 +95,7 @@ function outboxMapper() {
           transaction_id: e.transactionId, practitioner_id: e.practitionerId, provider_id: e.providerId,
           status: e.status, payload: e.payload || {}, attempts: e._attempts || 0, next_at: e._nextAt || 0,
           delivered: !!e._delivered, local_only: !!e._local, dead: !!e._dead,
+          ...(e._target !== undefined ? { target: e._target } : {}),
         };
       });
     },
@@ -101,6 +106,7 @@ function outboxMapper() {
           transactionId: r.transaction_id, practitionerId: r.practitioner_id, providerId: r.provider_id,
           status: r.status, payload: r.payload || {}, _attempts: r.attempts, _nextAt: Number(r.next_at),
           _delivered: r.delivered, _local: r.local_only, _dead: r.dead,
+          ...(r.target !== undefined ? { _target: r.target } : {}),
         };
         const seq = Number(r.seq);
         seqOf.set(e, seq);
@@ -163,52 +169,74 @@ function checkKey(req, headerName, expected) {
 // ... capped at 30s), in order, and picked up again after a restart. With no
 // URL configured, events are only recorded (delivered=true, local=true).
 
-function createOutbox({ store, name, url, key, log }) {
-  if (!Array.isArray(store.state.outbox)) store.state.outbox = [];
+// Options:
+//   field    which array in the state holds the queue (default 'outbox')
+//   resolve  for a queue with many targets: (event) -> { url, key } or null
+//            (null = the target is gone; the event is dropped). Each target
+//            keeps its own order, and a slow or failing target never holds
+//            up the others.
+function createOutbox({ store, name, url, key, log, field = 'outbox', resolve = null }) {
+  if (!Array.isArray(store.state[field])) store.state[field] = [];
   let flushing = false;
+  const box = () => store.state[field];
 
   function prune() {
-    const box = store.state.outbox;
-    const delivered = box.filter((e) => e._delivered);
+    const all = box();
+    const delivered = all.filter((e) => e._delivered);
     if (delivered.length > 200) {
       const drop = new Set(delivered.slice(0, delivered.length - 200));
-      store.state.outbox = box.filter((e) => !drop.has(e));
+      store.state[field] = all.filter((e) => !drop.has(e));
     }
   }
 
-  function enqueue(evt) {
+  function enqueue(evt, target) {
+    const live = resolve ? true : !!url;
     const e = {
       eventId: uuid(),
       at: nowIso(),
       ...evt,
       _attempts: 0,
       _nextAt: 0,
-      _delivered: !url,
-      _local: !url,
+      _delivered: !live,
+      _local: !live,
       _dead: false,
+      ...(resolve ? { _target: target } : {}),
     };
-    store.state.outbox.push(e);
+    box().push(e);
     prune();
     store.save();
-    if (log) log.info('event.queued', { transactionId: e.transactionId, outbox: name, eventId: e.eventId, eventName: e.event, status: e.status, delivery: url ? 'webhook' : 'recorded-only' });
+    if (log) log.info('event.queued', { transactionId: e.transactionId, outbox: name, eventId: e.eventId, eventName: e.event, status: e.status, delivery: live ? 'webhook' : 'recorded-only', ...(resolve ? { target } : {}) });
     flush();
     return e;
   }
 
   async function flush() {
-    if (flushing || !url) return;
+    if (flushing || (!url && !resolve)) return;
     flushing = true;
     try {
-      for (const e of store.state.outbox) {
+      const waiting = new Set(); // targets whose head event is not due yet, or just failed
+      for (const e of box()) {
         if (e._delivered || e._dead) continue;
-        if (Date.now() < e._nextAt) break; // keep order: wait for the head
-        const { _attempts, _nextAt, _delivered, _local, _dead, ...body } = e;
+        const t = resolve ? e._target : '';
+        if (waiting.has(t)) continue; // keep order per target
+        if (Date.now() < e._nextAt) {
+          waiting.add(t);
+          continue;
+        }
+        const dest = resolve ? resolve(e) : { url, key };
+        if (!dest) {
+          e._dead = true;
+          store.save();
+          if (log) log.warn('event.dropped', { transactionId: e.transactionId, outbox: name, eventId: e.eventId, eventName: e.event, target: t, reason: 'target no longer exists' });
+          continue;
+        }
+        const { _attempts, _nextAt, _delivered, _local, _dead, _target, ...body } = e;
         try {
           const res = await fetchTimeout(
-            url,
+            dest.url,
             {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-Api-Key': key || '' },
+              headers: { 'Content-Type': 'application/json', 'X-Api-Key': dest.key || '' },
               body: JSON.stringify(body),
             },
             5000
@@ -216,15 +244,15 @@ function createOutbox({ store, name, url, key, log }) {
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           e._delivered = true;
           store.save();
-          if (log) log.info('event.delivered', { transactionId: e.transactionId, outbox: name, eventId: e.eventId, eventName: e.event, attempts: e._attempts + 1 });
+          if (log) log.info('event.delivered', { transactionId: e.transactionId, outbox: name, eventId: e.eventId, eventName: e.event, attempts: e._attempts + 1, ...(resolve ? { target: t } : {}) });
         } catch (err) {
           e._attempts += 1;
           e._nextAt = Date.now() + Math.min(30000, 1000 * 2 ** Math.min(e._attempts, 5));
           if (e._attempts >= 20) e._dead = true;
-          if (log) log.warn('event.delivery_failed', { transactionId: e.transactionId, outbox: name, eventId: e.eventId, eventName: e.event, attempt: e._attempts, dead: e._dead, error: err.message });
+          if (log) log.warn('event.delivery_failed', { transactionId: e.transactionId, outbox: name, eventId: e.eventId, eventName: e.event, attempt: e._attempts, dead: e._dead, error: err.message, ...(resolve ? { target: t } : {}) });
           else console.error(`[${name}] event ${e.event} delivery failed (attempt ${e._attempts}): ${err.message}`);
           store.save();
-          break;
+          waiting.add(t);
         }
       }
     } finally {
@@ -237,9 +265,9 @@ function createOutbox({ store, name, url, key, log }) {
   return {
     enqueue,
     flush,
-    pending: () => store.state.outbox.filter((e) => !e._delivered && !e._dead).length,
-    list: () => store.state.outbox,
+    pending: () => box().filter((e) => !e._delivered && !e._dead).length,
+    list: () => box(),
   };
 }
 
-module.exports = { uuid, nowIso, createStore, createOutbox, fetchTimeout, send, readJson, checkKey, OUTBOX_TABLE, outboxMapper };
+module.exports = { uuid, nowIso, createStore, createOutbox, fetchTimeout, send, readJson, checkKey, OUTBOX_TABLE, TARGETED_OUTBOX_TABLE, outboxMapper };

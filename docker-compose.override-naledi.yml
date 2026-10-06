@@ -51,6 +51,9 @@ services:
       # Network identity (defaults are the starter kit's shared sandbox identities).
       - BAP_ID=${BAP_ID:-bap.example.com}
       - BPP_ID=${BPP_ID:-bpp.example.com}
+      # Public receiver URLs once the adapters are reachable from other nodes.
+      - BAP_URI=${BAP_URI:-http://onix-bap:8081/bap/receiver}
+      - BPP_URI=${BPP_URI:-http://onix-bpp:8082/bpp/receiver}
       - NETWORK_ID=${NETWORK_ID:-beckn.one/testnet}
     depends_on:
       naledi-db:
@@ -81,6 +84,10 @@ services:
       - DATABASE_URL=${BPP_DATABASE_URL:-postgres://naledi:naledi-local-only@naledi-db:5432/naledi_bpp}
       - PG_POOL_MAX=${PG_POOL_MAX:-3}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+    # Lets NGO subscription webhooks on this machine be reached as
+    # host.docker.internal (tests/uc1.js); Docker Desktop already provides it.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       naledi-db:
         condition: service_healthy

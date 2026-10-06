@@ -14,6 +14,9 @@
 //   POST /v1/provider/offer      -> provider side (offer to the practitioner)
 //   POST /v1/provider/decision   -> provider side (accept / decline + coach)
 //   POST /v1/provider/complete   -> provider side (mark support delivered)
+//   GET  /v1/commitments         who holds which need (per-Naledi shared view, UC1)
+//   GET|POST /v1/subscriptions   NGO webhooks: new matches, requests, status changes (UC1)
+//   DELETE /v1/subscriptions/{id}
 //   POST /v1/admin/reset         wipe state (both sides) for a fresh rehearsal
 //   GET  /v1/health              liveness, no key needed
 //
@@ -168,6 +171,30 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
 
     if (!checkKey(req, 'x-api-key', API_KEY)) {
       return send(res, 401, { error: 'unauthorized', message: 'missing or invalid X-Api-Key' });
+    }
+
+    // ---- shared view and NGO subscriptions live on the provider side; relayed as-is ----
+    const relayPath =
+      (req.method === 'GET' && path === '/v1/commitments') ||
+      (['GET', 'POST'].includes(req.method) && path === '/v1/subscriptions') ||
+      (req.method === 'DELETE' && /^\/v1\/subscriptions\/[^/]+$/.test(path));
+    if (relayPath) {
+      const qs = new URL(req.url, 'http://x').search;
+      const body = req.method === 'POST' ? JSON.stringify(await readJson(req)) : undefined;
+      let r;
+      try {
+        r = await fetchTimeout(
+          `${BACKBONE_BASE_URL}/internal/${path.slice('/v1/'.length)}${req.method === 'GET' ? qs : ''}`,
+          { method: req.method, headers: { 'x-internal-key': INTERNAL_KEY, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body },
+          8000
+        );
+      } catch (e) {
+        return send(res, 502, { error: 'provider_side_unreachable', message: e.message });
+      }
+      const text = await r.text();
+      let parsed;
+      try { parsed = JSON.parse(text); } catch (e) { parsed = { raw: text }; }
+      return send(res, r.status, parsed);
     }
 
     // ---- provider-side calls are relayed to the provider app on the internal network ----

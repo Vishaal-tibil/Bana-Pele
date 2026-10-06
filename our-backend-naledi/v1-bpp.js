@@ -16,10 +16,14 @@
 // Internal endpoints (header x-internal-key):
 //   POST /internal/offer      POST /internal/decision   POST /internal/complete
 //   POST /internal/reset      GET  /internal/state      GET /internal/log/{tx}
+//   GET  /internal/commitments             who holds which need (shared view, UC1)
+//   GET|POST /internal/subscriptions       NGO webhooks for new matches / requests
+//   DELETE /internal/subscriptions/{id}
 
 'use strict';
 
-const { createStore, createOutbox, send, readJson, checkKey, fetchTimeout, uuid, nowIso, OUTBOX_TABLE, outboxMapper } = require('./netlib');
+const crypto = require('crypto');
+const { createStore, createOutbox, send, readJson, checkKey, fetchTimeout, uuid, nowIso, OUTBOX_TABLE, TARGETED_OUTBOX_TABLE, outboxMapper } = require('./netlib');
 const { COMMON_SCHEMA } = require('./db');
 
 // ---- PostgreSQL tables (database naledi_bpp) ----
@@ -67,6 +71,38 @@ const SCHEMA = [
      message     jsonb NOT NULL
    )`,
   // What the provider side knows about each search (who matched, offers sent).
+  // NGO subscriptions (UC1): who wants to be told about new matches and requests.
+  `CREATE TABLE IF NOT EXISTS subscriptions (
+     id           text PRIMARY KEY,
+     url          text NOT NULL,
+     secret       text NOT NULL,
+     name         text,
+     provider_ids jsonb NOT NULL DEFAULT '[]',
+     need_types   jsonb NOT NULL DEFAULT '[]',
+     regions      jsonb NOT NULL DEFAULT '[]',
+     events       jsonb NOT NULL DEFAULT '[]',
+     created_at   timestamptz NOT NULL
+   )`,
+  // Events waiting for / delivered to the subscriptions (one queue, a target per row).
+  `CREATE TABLE IF NOT EXISTS sub_outbox (
+     event_id        uuid PRIMARY KEY,
+     seq             bigint NOT NULL,
+     at              timestamptz NOT NULL,
+     event           text NOT NULL,
+     epoch           integer NOT NULL,
+     transaction_id  text,
+     practitioner_id text,
+     provider_id     text,
+     status          text,
+     payload         jsonb NOT NULL DEFAULT '{}',
+     attempts        integer NOT NULL DEFAULT 0,
+     next_at         bigint NOT NULL DEFAULT 0,
+     delivered       boolean NOT NULL DEFAULT false,
+     local_only      boolean NOT NULL DEFAULT false,
+     dead            boolean NOT NULL DEFAULT false,
+     target          text
+   )`,
+  `CREATE INDEX IF NOT EXISTS sub_outbox_seq ON sub_outbox (seq)`,
   `CREATE TABLE IF NOT EXISTS tx_meta (
      transaction_id   text PRIMARY KEY,
      practitioner_id  text,
@@ -88,6 +124,8 @@ const TABLES = {
   pending_requests: { pk: 'id', order: 'seq', cols: ['id', 'seq', 'action', 'need_id', 'provider_id', 'context', 'message'], json: ['context', 'message'] },
   tx_meta: { pk: 'transaction_id', order: 'created_at', cols: ['transaction_id', 'practitioner_id', 'need_type', 'region', 'provider_ids', 'discover_context', 'match_error', 'offers', 'created_at'], json: ['provider_ids', 'discover_context', 'offers'] },
   outbox: OUTBOX_TABLE,
+  subscriptions: { pk: 'id', order: 'created_at', cols: ['id', 'url', 'secret', 'name', 'provider_ids', 'need_types', 'regions', 'events', 'created_at'], json: ['provider_ids', 'need_types', 'regions', 'events'] },
+  sub_outbox: TARGETED_OUTBOX_TABLE,
 };
 
 const pick = (o, known) => Object.fromEntries(Object.entries(o).filter(([key]) => !known.includes(key)));
@@ -95,6 +133,7 @@ const iso = (v) => (v instanceof Date ? v.toISOString() : v);
 
 function bppDb(pool, log) {
   const ob = outboxMapper();
+  const sob = outboxMapper();
   return {
     pool, log, name: 'bpp', schema: SCHEMA, tables: TABLES,
     toRows: (S) => {
@@ -119,6 +158,11 @@ function bppDb(pool, log) {
           discover_context: m.discoverContext || null, match_error: m.matchError || null, offers: m.offers || [], created_at: m.createdAt,
         })),
         outbox: ob.toRows(S.outbox),
+        subscriptions: Object.values(S.subscriptions || {}).map((x) => ({
+          id: x.id, url: x.url, secret: x.secret, name: x.name || null, provider_ids: x.providerIds, need_types: x.needTypes,
+          regions: x.regions, events: x.events, created_at: x.createdAt,
+        })),
+        sub_outbox: sob.toRows(S.subOutbox),
       };
     },
     fromRows: (S, rows) => {
@@ -146,6 +190,14 @@ function bppDb(pool, log) {
         };
       }
       S.outbox = ob.fromRows(rows.outbox);
+      S.subscriptions = {};
+      for (const r of rows.subscriptions) {
+        S.subscriptions[r.id] = {
+          id: r.id, url: r.url, secret: r.secret, name: r.name, providerIds: r.provider_ids || [], needTypes: r.need_types || [],
+          regions: r.regions || [], events: r.events || [], createdAt: iso(r.created_at),
+        };
+      }
+      S.subOutbox = sob.fromRows(rows.sub_outbox);
     },
   };
 }
@@ -165,9 +217,19 @@ module.exports = function createV1Bpp(k) {
   const STATE_FILE = process.env.STATE_FILE || '';
   const WAIT_FOR_REQUEST_MS = Number(process.env.WAIT_FOR_REQUEST_MS || 4000);
 
-  const store = createStore(STATE_FILE, { epoch: 1, txMeta: {}, snapshot: null, outbox: [] }, pool ? bppDb(pool, log) : null);
+  const store = createStore(STATE_FILE, { epoch: 1, txMeta: {}, snapshot: null, outbox: [], subscriptions: {}, subOutbox: [] }, pool ? bppDb(pool, log) : null);
   const S = store.state;
   const outbox = createOutbox({ store, name: 'bpp-events', url: EVENTS_URL, key: EVENTS_API_KEY, log });
+  // NGO subscriptions: same event shapes, delivered to each subscriber that asked for them.
+  if (!S.subscriptions) S.subscriptions = {};
+  const subOutbox = createOutbox({
+    store, name: 'ngo-subscriptions', log, field: 'subOutbox',
+    resolve: (e) => {
+      const sub = S.subscriptions[e._target];
+      return sub ? { url: sub.url, key: sub.secret } : null;
+    },
+  });
+  const SUB_EVENTS = ['practitioner.matched', 'request.received', 'status.changed'];
 
   // ---- persistence of the legacy in-memory maps ----
 
@@ -218,7 +280,7 @@ module.exports = function createV1Bpp(k) {
   // ---- events to the partner ----
 
   function emit(event, e) {
-    return outbox.enqueue({
+    const evt = {
       event,
       epoch: S.epoch,
       transactionId: e.transactionId || null,
@@ -226,7 +288,69 @@ module.exports = function createV1Bpp(k) {
       providerId: e.providerId || null,
       status: e.status || null,
       payload: e.payload || {},
+    };
+    const queued = outbox.enqueue(evt);
+    notifySubscribers(evt);
+    return queued;
+  }
+
+  // ---- NGO subscriptions (UC1: tell NGOs about new matches and requests) ----
+
+  const lc = (v) => String(v || '').toLowerCase();
+  function subscriptionMatches(sub, evt) {
+    if (sub.events.length && !sub.events.includes(evt.event)) return false;
+    if (sub.providerIds.length && !sub.providerIds.includes(evt.providerId)) return false;
+    const p = evt.payload || {};
+    if (sub.needTypes.length && !sub.needTypes.includes(p.needType)) return false;
+    if (sub.regions.length && !sub.regions.some((r) => lc(r) === lc(p.region))) return false;
+    return true;
+  }
+
+  function notifySubscribers(evt) {
+    for (const sub of Object.values(S.subscriptions)) {
+      if (subscriptionMatches(sub, evt)) subOutbox.enqueue(evt, sub.id);
+    }
+  }
+
+  function publicSubscription(sub) {
+    const { secret, ...rest } = sub;
+    return rest;
+  }
+
+  function cleanList(v, name) {
+    if (v === undefined || v === null) return [];
+    if (!Array.isArray(v) || v.some((x) => typeof x !== 'string' || !x)) throw Object.assign(new Error(`${name} must be a list of strings`), { status: 400 });
+    return [...new Set(v)];
+  }
+
+  // ---- commitments: the per-Naledi shared view (UC1) ----
+
+  function commitments(q) {
+    const list = [...k.needs.values()].map((n) => {
+      const provider = n.providerId ? k.providers.get(n.providerId) : null;
+      const waiting = k.pendingRequests.find((p) => p.needId === n.id);
+      const naledi = k.naledis.get(n.naledisId);
+      return {
+        needId: n.id,
+        practitionerId: n.naledisId,
+        needType: n.type,
+        region: (S.txMeta[n.transactionId || (waiting && waiting.context && waiting.context.transactionId)] || {}).region || (naledi && naledi.region) || null,
+        status: n.status,
+        providerId: n.providerId || null,
+        providerName: provider ? provider.name : null,
+        coachId: n.coachId || null,
+        transactionId: n.transactionId || null,
+        updatedAt: n.updatedAt || null,
+        awaitingDecision: waiting ? { stage: waiting.action === 'confirm' ? 'confirm' : 'select_init', providerId: waiting.providerId, transactionId: waiting.context && waiting.context.transactionId } : null,
+      };
     });
+    return list.filter(
+      (c) =>
+        (!q.practitionerId || c.practitionerId === q.practitionerId) &&
+        (!q.status || c.status === q.status) &&
+        (!q.providerId || c.providerId === q.providerId) &&
+        (!q.needType || c.needType === q.needType)
+    );
   }
 
   function onQueued(pending) {
@@ -236,7 +360,10 @@ module.exports = function createV1Bpp(k) {
       practitionerId: need.naledisId,
       providerId: pending.providerId,
       status: 'awaiting_decision',
-      payload: { stage: pending.action === 'confirm' ? 'confirm' : 'select_init', needId: pending.needId, needType: need.type },
+      payload: {
+        stage: pending.action === 'confirm' ? 'confirm' : 'select_init', needId: pending.needId, needType: need.type,
+        region: (S.txMeta[pending.context && pending.context.transactionId] || {}).region || (k.naledis.get(need.naledisId) || {}).region || null,
+      },
     });
     persist();
   }
@@ -340,12 +467,67 @@ module.exports = function createV1Bpp(k) {
     }
 
     if (req.method === 'GET' && path === '/internal/state') {
-      return send(res, 200, { epoch: S.epoch, txMeta: S.txMeta, pending: k.pendingRequests, needs: [...k.needs.values()], outbox: outbox.list() });
+      return send(res, 200, { epoch: S.epoch, txMeta: S.txMeta, pending: k.pendingRequests, needs: [...k.needs.values()], outbox: outbox.list(), subscriptionOutbox: subOutbox.list() });
     }
 
     const logMatch = path.match(/^\/internal\/log\/([^/]+)$/);
     if (req.method === 'GET' && logMatch) {
       return send(res, 200, (await log.readTx(decodeURIComponent(logMatch[1]))) || []);
+    }
+
+    if (req.method === 'GET' && path === '/internal/commitments') {
+      const q = Object.fromEntries(new URL(req.url, 'http://x').searchParams);
+      const list = commitments(q);
+      return send(res, 200, { count: list.length, commitments: list });
+    }
+
+    if (path === '/internal/subscriptions' && req.method === 'GET') {
+      return send(res, 200, Object.values(S.subscriptions).map(publicSubscription));
+    }
+
+    if (path === '/internal/subscriptions' && req.method === 'POST') {
+      const b = await readJson(req);
+      let u;
+      try {
+        u = new URL(String(b.url || ''));
+        if (!['http:', 'https:'].includes(u.protocol)) throw new Error('scheme');
+      } catch (e) {
+        return send(res, 400, { error: 'invalid_request', message: 'url must be an http(s) address' });
+      }
+      let sub;
+      try {
+        const events = cleanList(b.events, 'events');
+        const unknown = events.filter((x) => !SUB_EVENTS.includes(x));
+        if (unknown.length) return send(res, 400, { error: 'invalid_request', message: `unknown events: ${unknown.join(', ')}`, allowed: SUB_EVENTS });
+        sub = {
+          id: `sub-${uuid().slice(0, 8)}`,
+          url: u.toString(),
+          secret: b.secret ? String(b.secret) : crypto.randomBytes(24).toString('hex'),
+          name: b.name ? String(b.name) : null,
+          providerIds: cleanList(b.providerIds, 'providerIds'),
+          needTypes: cleanList(b.needTypes, 'needTypes'),
+          regions: cleanList(b.regions, 'regions'),
+          events: events.length ? events : SUB_EVENTS.slice(0, 2),
+          createdAt: nowIso(),
+        };
+      } catch (e) {
+        return send(res, e.status || 400, { error: 'invalid_request', message: e.message });
+      }
+      S.subscriptions[sub.id] = sub;
+      store.save();
+      log.info('subscription.created', { subscriptionId: sub.id, url: sub.url, providerIds: sub.providerIds, needTypes: sub.needTypes, regions: sub.regions, events: sub.events });
+      // The secret is returned once, here; later reads never show it.
+      return send(res, 201, { ...publicSubscription(sub), secret: sub.secret });
+    }
+
+    const subDel = path.match(/^\/internal\/subscriptions\/([^/]+)$/);
+    if (subDel && req.method === 'DELETE') {
+      const id = decodeURIComponent(subDel[1]);
+      if (!S.subscriptions[id]) return send(res, 404, { error: 'unknown_subscription' });
+      delete S.subscriptions[id];
+      store.save();
+      log.info('subscription.deleted', { subscriptionId: id });
+      return send(res, 200, { id, deleted: true });
     }
 
     if (req.method === 'POST' && path === '/internal/reset') {
@@ -356,6 +538,7 @@ module.exports = function createV1Bpp(k) {
       k.seed();
       S.txMeta = {};
       S.outbox = [];
+      S.subOutbox = []; // subscriptions themselves are configuration and survive a reset
       S.epoch += 1;
       persist();
       log.info('admin.reset', { epoch: S.epoch });
@@ -441,5 +624,23 @@ module.exports = function createV1Bpp(k) {
     return send(res, 404, { error: 'not_found' });
   }
 
-  return { handle, handleDiscover, ensureNeed, onQueued, persist, restore, delegated: !!MATCH_URL, ready: store.ready, flush: store.flush };
+  // A need changed hands (reserved, fulfilled, reopened): tell the subscribed
+  // NGOs, so a provider sees when another one has taken a need. The partner
+  // already gets status.changed from the buyer side, so this goes to
+  // subscriptions only.
+  function onNeedStatus(need, before, pending) {
+    if (need.status === before) return;
+    const naledi = k.naledis.get(need.naledisId) || {};
+    notifySubscribers({
+      event: 'status.changed',
+      epoch: S.epoch,
+      transactionId: need.transactionId || null,
+      practitionerId: need.naledisId || null,
+      providerId: pending.providerId || null,
+      status: need.status,
+      payload: { needId: need.id, needType: need.type, region: (S.txMeta[need.transactionId] || {}).region || naledi.region || null, from: before, coachId: need.coachId || null },
+    });
+  }
+
+  return { handle, handleDiscover, ensureNeed, onQueued, onNeedStatus, persist, restore, delegated: !!MATCH_URL, ready: store.ready, flush: store.flush };
 };
