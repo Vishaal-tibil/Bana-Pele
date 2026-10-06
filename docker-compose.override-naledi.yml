@@ -48,8 +48,10 @@ services:
   beckn-router:
     ports: !reset []
 
+  # Loopback only: the demo pages (/live) and tests/uc1.js use this on the
+  # developer's own machine. Other machines on the network cannot reach it.
   sandbox-bap:
-    ports: !reset []
+    ports: !override ["127.0.0.1:3001:3001"]
     command: ["node", "frontdoor-bap-server.js"]
     build:
       context: ./our-backend-naledi
@@ -85,8 +87,9 @@ services:
       # first, and the server listens on IPv4 only.
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/api/health"]
 
+  # Loopback only: tests/e2e.js calls the provider app here on the developer's machine.
   sandbox-bpp:
-    ports: !reset []
+    ports: !override ["127.0.0.1:3002:3002"]
     command: ["node", "backbone-bpp-server.js"]
     build:
       context: ./our-backend-naledi
