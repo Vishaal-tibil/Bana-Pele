@@ -21,6 +21,7 @@ function fakePool(lockAnswer) {
           if (/pg_try_advisory_lock/.test(sql)) return { rows: [{ ok: lockAnswer }] };
           throw new Error('unexpected query: ' + sql);
         },
+        on() {},
         release() { released += 1; },
       };
     },
@@ -46,6 +47,28 @@ test('second instance is refused and its client is released', async () => {
     /single-writer lock held/
   );
   assert.equal(pool.released, 1, 'the refused client goes back to the pool');
+});
+
+test('losing the lock connection is logged and stops the process (onLost)', async () => {
+  let handler = null;
+  const logged = [];
+  const pool = {
+    async connect() {
+      return {
+        async query() { return { rows: [{ ok: true }] }; },
+        on(event, fn) { if (event === 'error') handler = fn; },
+        release() {},
+      };
+    },
+  };
+  const spyLog = { info() {}, warn() {}, error(event, fields) { logged.push({ event, fields }); } };
+  let stopped = null;
+  await acquireWriterLock(pool, spyLog, (e) => { stopped = e; });
+  assert.ok(handler, 'an error handler is attached to the lock connection');
+  const cut = new Error('terminating connection due to administrator command');
+  handler(cut);
+  assert.equal(logged[0].event, 'db.writer_lock_lost');
+  assert.equal(stopped, cut, 'onLost receives the error and the process is stopped');
 });
 
 test('a database error while locking is passed up and the client is released', async () => {
