@@ -29,7 +29,7 @@ const nowIso = () => new Date().toISOString();
 function createStore(file, initial, db) {
   const state = JSON.parse(JSON.stringify(initial));
   if (db) {
-    const { createSync, migrate } = require('./db');
+    const { createSync, migrate, acquireWriterLock } = require('./db');
     const sync = createSync({
       pool: db.pool,
       tables: db.tables,
@@ -39,6 +39,8 @@ function createStore(file, initial, db) {
       name: db.name,
     });
     const ready = (async () => {
+      // Refuse a second writer before touching any table (see db.js).
+      await acquireWriterLock(db.pool, db.log);
       await migrate(db.pool, db.schema);
       await sync.load();
       db.log.info('store.loaded', { store: db.name, backend: 'postgres' });

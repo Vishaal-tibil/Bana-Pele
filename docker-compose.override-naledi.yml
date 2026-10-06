@@ -27,6 +27,13 @@
 # entirely rather than merging -- so PORT is repeated here explicitly.
 
 services:
+  # Self-heal: on some hosts, Docker/WSL2 memory pressure sends redis a plain
+  # SIGTERM (a graceful stop, exit 0 -- not a crash) after it's been up for a
+  # while. The base file gives it no restart policy, so it would stay down and
+  # take onix-bap/onix-bpp down with it (both depend on it).
+  redis:
+    restart: unless-stopped
+
   sandbox-bap:
     command: ["node", "frontdoor-bap-server.js"]
     build:

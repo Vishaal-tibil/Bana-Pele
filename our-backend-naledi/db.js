@@ -48,6 +48,32 @@ function openPool(log) {
   return pool;
 }
 
+// Single-writer guard. Each app keeps its whole state in memory and writes only
+// the rows that changed since its own last save. Two copies on one database
+// would therefore overwrite each other's rows without any error. This takes a
+// session-level advisory lock for the life of the process, on its own client:
+// a second copy is refused at start, instead of corrupting the first one.
+// The client stays checked out, so the pool has one connection fewer.
+const WRITER_LOCK_KEY = 424243;
+
+async function acquireWriterLock(pool, log) {
+  const client = await pool.connect();
+  let ok = false;
+  try {
+    const r = await client.query('SELECT pg_try_advisory_lock($1) AS ok', [WRITER_LOCK_KEY]);
+    ok = !!(r.rows[0] && r.rows[0].ok);
+  } catch (e) {
+    client.release();
+    throw e;
+  }
+  if (!ok) {
+    client.release();
+    throw new Error('another instance already writes to this database (single-writer lock held); refusing to start');
+  }
+  log.info('db.writer_lock', { key: WRITER_LOCK_KEY });
+  return client; // keep a reference so the lock lives as long as the process
+}
+
 async function migrate(pool, statements) {
   // One advisory lock per database, so two copies starting at once do not race.
   const client = await pool.connect();
@@ -237,4 +263,4 @@ function createSync({ pool, tables, toRows, fromRows, log, name }) {
 
 const iso = (v) => (v instanceof Date ? v.toISOString() : v);
 
-module.exports = { openPool, migrate, createSync, COMMON_SCHEMA, iso };
+module.exports = { openPool, migrate, acquireWriterLock, WRITER_LOCK_KEY, createSync, COMMON_SCHEMA, iso };
