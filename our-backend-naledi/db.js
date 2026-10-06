@@ -56,7 +56,12 @@ function openPool(log) {
 // The client stays checked out, so the pool has one connection fewer.
 const WRITER_LOCK_KEY = 424243;
 
-async function acquireWriterLock(pool, log) {
+// If PostgreSQL ends this connection (an administrator command, a failover,
+// an idle timeout), the lock is gone and a second copy could start writing.
+// So the process stops right away: the restart policy starts it again, and the
+// new copy takes the lock back. Without a handler here, Node would crash on an
+// unhandled 'error' event instead, with no message about the lock.
+async function acquireWriterLock(pool, log, onLost = () => process.exit(1)) {
   const client = await pool.connect();
   let ok = false;
   try {
@@ -70,6 +75,10 @@ async function acquireWriterLock(pool, log) {
     client.release();
     throw new Error('another instance already writes to this database (single-writer lock held); refusing to start');
   }
+  client.on('error', (e) => {
+    log.error('db.writer_lock_lost', { key: WRITER_LOCK_KEY, error: e.message });
+    onLost(e);
+  });
   log.info('db.writer_lock', { key: WRITER_LOCK_KEY });
   return client; // keep a reference so the lock lives as long as the process
 }
