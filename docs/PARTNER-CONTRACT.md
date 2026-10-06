@@ -137,6 +137,49 @@ Rules for the webhook:
   not lose them.
 - `epoch` changes when I reset. If it changes, drop the network state you hold.
 
+## Shared view and NGO notifications (UC1)
+
+### `GET /v1/commitments` — who is doing what for a Naledi
+
+The network's own record of every need and who holds it. The
+coordination-service reads this to build the per-Naledi shared view; it does not
+keep its own copy of network state.
+
+Query (all optional): `practitionerId`, `status`, `providerId`, `needType`.
+
+```json
+{ "count": 1, "commitments": [ {
+    "needId": "need_...", "practitionerId": "prac_naledi_mahlangu",
+    "needType": "registration", "region": "Alexandra",
+    "status": "reserved", "providerId": "provider-wehelp", "providerName": "WeHelp",
+    "coachId": "coach_thabo_nkosi", "transactionId": "34d3...", "updatedAt": "2026-10-06T09:12:03Z",
+    "awaitingDecision": null
+} ] }
+```
+
+`status` is `open`, `reserved` or `fulfilled`. While a request waits for a
+provider, `awaitingDecision` is `{ stage, providerId, transactionId }` (`stage`
+is `select_init` or `confirm`).
+
+### `/v1/subscriptions` — tell an NGO portal when something matches
+
+Any NGO portal (not only WeHelp) can register a webhook and get the events that
+match its filters, without building `/network/events` into this backend.
+
+| Call | Body / result |
+|---|---|
+| `POST /v1/subscriptions` | `{ name, url, secret?, providerIds?, needTypes?, regions?, events? }` → `201` with `id` and `secret` (generated if you did not send one; shown only here) |
+| `GET /v1/subscriptions` | list, secrets hidden |
+| `DELETE /v1/subscriptions/{id}` | `200 { deleted: true }`, `404 unknown_subscription` |
+
+- `events`: any of `practitioner.matched`, `request.received`, `status.changed`
+  (default: the first two). Empty filters mean "all".
+- Each delivery is a `POST` to `url` with the same body as `/network/events`
+  above and the subscription `secret` in `X-Api-Key`, so the portal can check
+  it came from the network.
+- Same delivery rules as the webhook: in order, retried with backoff, saved
+  across restarts, deduplicate by `eventId`.
+
 ## How your buttons map
 
 | Your action | You call |

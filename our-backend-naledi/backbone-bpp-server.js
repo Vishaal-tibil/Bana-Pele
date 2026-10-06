@@ -454,8 +454,12 @@ function resolvePending(pendingId, approved) {
   if (!need) return;
 
   const before = need.status;
-  const logStatus = () =>
-    log.info('need.status_changed', { transactionId: pending.context && pending.context.transactionId, needId: pending.needId, providerId: pending.providerId, stage: pending.action, approved, from: before, to: need.status });
+  const logStatus = () => {
+    need.transactionId = (pending.context && pending.context.transactionId) || need.transactionId || null;
+    need.updatedAt = new Date().toISOString();
+    log.info('need.status_changed', { transactionId: need.transactionId, needId: pending.needId, providerId: pending.providerId, stage: pending.action, approved, from: before, to: need.status });
+    v1.onNeedStatus(need, before, pending);
+  };
   if (pending.action === 'init') {
     // reserve or reject-and-reopen
     need.status = approved ? 'reserved' : 'open';

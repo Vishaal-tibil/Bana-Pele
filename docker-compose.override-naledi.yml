@@ -81,6 +81,10 @@ services:
       - DATABASE_URL=${BPP_DATABASE_URL:-postgres://naledi:naledi-local-only@naledi-db:5432/naledi_bpp}
       - PG_POOL_MAX=${PG_POOL_MAX:-3}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+    # Lets NGO subscription webhooks on this machine be reached as
+    # host.docker.internal (tests/uc1.js); Docker Desktop already provides it.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       naledi-db:
         condition: service_healthy
