@@ -367,6 +367,7 @@ paths:
         - { name: status, in: query, schema: { type: string, enum: [open, reserved, fulfilled] } }
         - { name: providerId, in: query, schema: { type: string } }
         - { name: needType, in: query, schema: { $ref: '#/components/schemas/NeedType' } }
+        - { name: coachId, in: query, schema: { type: string }, description: Only needs assigned to this coach (coach app). }
       responses:
         '200':
           description: Matching commitments

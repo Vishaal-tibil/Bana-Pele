@@ -257,7 +257,9 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
     }
 
     if (req.method === 'GET' && path === '/v1/transactions') {
-      return send(res, 200, Object.values(S.transactions).map(summary));
+      const who = new URL(req.url, 'http://x').searchParams.get('practitionerId');
+      const list = Object.values(S.transactions).filter((t) => !who || t.practitionerId === who);
+      return send(res, 200, list.map(summary));
     }
 
     if (req.method === 'GET' && path === '/v1/events') {

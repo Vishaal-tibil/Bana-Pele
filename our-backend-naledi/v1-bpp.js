@@ -349,7 +349,8 @@ module.exports = function createV1Bpp(k) {
         (!q.practitionerId || c.practitionerId === q.practitionerId) &&
         (!q.status || c.status === q.status) &&
         (!q.providerId || c.providerId === q.providerId) &&
-        (!q.needType || c.needType === q.needType)
+        (!q.needType || c.needType === q.needType) &&
+        (!q.coachId || c.coachId === q.coachId)
     );
   }
 

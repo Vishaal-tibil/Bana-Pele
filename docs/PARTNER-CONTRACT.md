@@ -145,7 +145,7 @@ The network's own record of every need and who holds it. The
 coordination-service reads this to build the per-Naledi shared view; it does not
 keep its own copy of network state.
 
-Query (all optional): `practitionerId`, `status`, `providerId`, `needType`.
+Query (all optional): `practitionerId`, `status`, `providerId`, `needType`, `coachId`.
 
 ```json
 { "count": 1, "commitments": [ {

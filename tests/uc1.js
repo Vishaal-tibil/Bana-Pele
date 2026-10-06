@@ -120,6 +120,10 @@ const server = http.createServer((req, res) => {
   check('WeHelp received status.changed (reserved)', !!st, got.wehelp.map((x) => `${x.evt.event}:${x.evt.status}`));
   r = await api('GET', '/v1/commitments?status=reserved&providerId=provider-wehelp');
   check('filter by status and provider works', r.status === 200 && r.body.commitments.some((n) => n.practitionerId === P), r.body.count);
+  r = await api('GET', '/v1/commitments?coachId=coach_uc1');
+  check('filter by coach works (coach app view)', r.status === 200 && r.body.commitments.length >= 1 && r.body.commitments.every((n) => n.coachId === 'coach_uc1'), r.body);
+  r = await api('GET', `/v1/transactions?practitionerId=${P}`);
+  check('transactions filtered by practitioner (Naledi app view)', r.status === 200 && r.body.length === 1 && r.body[0].transactionId === tx, r.body);
 
   section('7. Confirm and complete');
   // confirm needs Naledi's side to have received the provider's acceptance (on_init) first
