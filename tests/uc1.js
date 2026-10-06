@@ -89,7 +89,7 @@ const server = http.createServer((req, res) => {
   check('list never shows a secret', listed.every((x) => x.secret === undefined), listed);
 
   section('3. A new Naledi matches: WeHelp is told');
-  r = await api('POST', '/v1/search', { practitionerId: P, needType: 'registration', region: 'Alexandra', tier: 'Pre-Bronze', children: 20 });
+  r = await api('POST', '/v1/search', { practitionerId: P, needType: 'registration', region: 'Alexandra', tier: 'Pre-Bronze', children: 20, title: 'Register my ECD', description: 'Help submitting DSD registration documents' });
   const tx = r.body.transactionId;
   check('search accepted', r.status === 202 && tx, r);
   const matched = await waitFor(() => got.wehelp.find((x) => x.evt.event === 'practitioner.matched' && x.evt.transactionId === tx), 15000);
@@ -134,6 +134,54 @@ const server = http.createServer((req, res) => {
   check('complete accepted', r.status === 200 && r.body.needStatus === 'fulfilled', r);
   c = (await api('GET', `/v1/commitments?practitionerId=${P}`)).body.commitments.find((n) => n.needType === 'registration');
   check('commitment: fulfilled', c && c.status === 'fulfilled', c);
+  check('commitment keeps the practitioner id exactly as sent', c && c.practitionerId === P, c && c.practitionerId);
+  check('commitment carries title, description and createdAt from the search', c && c.title === 'Register my ECD' && c.description === 'Help submitting DSD registration documents' && !!c.createdAt, c);
+  check('commitment has completedAt once fulfilled', c && !!c.completedAt && c.completedAt >= c.createdAt, c && c.completedAt);
+  const evs = (c && c.history || []).map((h) => h.event);
+  check('history: requested, accepted, confirm_requested, fulfilled (timestamped)', JSON.stringify(evs) === JSON.stringify(['requested', 'accepted', 'confirm_requested', 'fulfilled']) && c.history.every((h) => h.at), evs);
+  r = await api('GET', `/v1/transactions?practitionerId=${P}`);
+  check('Naledi side also returns the title', r.body[0] && r.body[0].title === 'Register my ECD', r.body[0]);
+
+  section('7b. Decline, then withdraw');
+  const P2 = P + '_d';
+  const ask = async (who) => {
+    const s1 = await api('POST', '/v1/search', { practitionerId: P2, needType: 'registration', region: 'Alexandra', title: 'Second ask' });
+    await waitFor(async () => (await api('GET', `/v1/status/${s1.body.transactionId}`)).body.status === 'results_ready');
+    await api('POST', '/v1/select', { transactionId: s1.body.transactionId, practitionerId: P2, needType: 'registration', providerId: who });
+    await waitFor(async () => {
+      const x = await api('GET', `/v1/commitments?practitionerId=${P2}`);
+      return (x.body.commitments || []).some((n) => n.awaitingDecision && n.awaitingDecision.transactionId === s1.body.transactionId);
+    });
+    return s1.body.transactionId;
+  };
+  const txD = await ask('provider-wehelp');
+  r = await api('POST', '/v1/provider/decision', { transactionId: txD, decision: 'decline' });
+  check('provider declines', r.status === 200 && r.body.needStatus === 'open', r.body);
+  c = (await api('GET', `/v1/commitments?practitionerId=${P2}`)).body.commitments[0];
+  check('after a decline the need is open again, nobody holds it', c && c.status === 'open' && !c.providerId && !c.awaitingDecision, c);
+  check('history records the decline and who declined', c && c.history.some((h) => h.event === 'declined' && h.providerId === 'provider-wehelp' && h.at), c && c.history);
+  check('Naledi side sees rejected (and may ask someone else)', (await waitFor(async () => (await api('GET', `/v1/status/${txD}`)).body.status === 'rejected')) === true);
+
+  const txW = await ask('provider-wehelp');
+  r = await api('POST', '/v1/withdraw', { transactionId: txW, reason: 'no longer needed' });
+  check('withdraw while waiting for the provider -> 202', r.status === 202 && r.body.status === 'withdrawing', r);
+  check('Naledi side becomes withdrawn', (await waitFor(async () => (await api('GET', `/v1/status/${txW}`)).body.status === 'withdrawn')) === true);
+  c = (await api('GET', `/v1/commitments?practitionerId=${P2}`)).body.commitments[0];
+  check('need is withdrawn, with no waiting request left', c && c.status === 'withdrawn' && !c.awaitingDecision, c);
+  r = await api('POST', '/v1/provider/decision', { transactionId: txW, decision: 'accept', coachId: 'coach_x' });
+  check('the provider can no longer accept a withdrawn request', r.status === 404, r);
+
+  const txR = await ask('provider-wehelp');
+  c = (await api('GET', `/v1/commitments?practitionerId=${P2}`)).body.commitments[0];
+  check('asking again after withdrawing re-opens the need', c && c.status === 'open' && c.awaitingDecision, c);
+  await api('POST', '/v1/provider/decision', { transactionId: txR, decision: 'accept', coachId: 'coach_x' });
+  await waitFor(async () => (await api('GET', `/v1/status/${txR}`)).body.status === 'reserved');
+  r = await api('POST', '/v1/withdraw', { transactionId: txR });
+  await waitFor(async () => (await api('GET', `/v1/status/${txR}`)).body.status === 'withdrawn');
+  c = (await api('GET', `/v1/commitments?practitionerId=${P2}`)).body.commitments[0];
+  check('withdraw after the provider accepted releases the provider and coach', c && c.status === 'withdrawn' && !c.providerId && !c.coachId, c);
+  r = await api('POST', '/v1/withdraw', { transactionId: tx });
+  check('a delivered request cannot be withdrawn (409)', r.status === 409 && r.body.error === 'already_fulfilled', r);
 
   section('8. Filters: the nutrition NGO heard nothing');
   await sleep(1500);

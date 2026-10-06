@@ -114,6 +114,8 @@ const SCHEMA = [
      offers           jsonb NOT NULL DEFAULT '[]',
      created_at       timestamptz NOT NULL
    )`,
+  // What the practitioner wrote when asking (title, description); added later, hence ALTER.
+  `ALTER TABLE tx_meta ADD COLUMN IF NOT EXISTS request jsonb`,
 ];
 
 const TABLES = {
@@ -122,7 +124,7 @@ const TABLES = {
   naledis: { pk: 'id', order: 'id', cols: ['id', 'name', 'region', 'need_ids'], json: ['need_ids'] },
   needs: { pk: 'id', order: 'id', cols: ['id', 'naledi_id', 'type', 'status', 'provider_id', 'coach_id', 'note', 'extra'], json: ['extra'] },
   pending_requests: { pk: 'id', order: 'seq', cols: ['id', 'seq', 'action', 'need_id', 'provider_id', 'context', 'message'], json: ['context', 'message'] },
-  tx_meta: { pk: 'transaction_id', order: 'created_at', cols: ['transaction_id', 'practitioner_id', 'need_type', 'region', 'provider_ids', 'discover_context', 'match_error', 'offers', 'created_at'], json: ['provider_ids', 'discover_context', 'offers'] },
+  tx_meta: { pk: 'transaction_id', order: 'created_at', cols: ['transaction_id', 'practitioner_id', 'need_type', 'region', 'provider_ids', 'discover_context', 'match_error', 'offers', 'created_at', 'request'], json: ['provider_ids', 'discover_context', 'offers', 'request'] },
   outbox: OUTBOX_TABLE,
   subscriptions: { pk: 'id', order: 'created_at', cols: ['id', 'url', 'secret', 'name', 'provider_ids', 'need_types', 'regions', 'events', 'created_at'], json: ['provider_ids', 'need_types', 'regions', 'events'] },
   sub_outbox: TARGETED_OUTBOX_TABLE,
@@ -156,6 +158,7 @@ function bppDb(pool, log) {
         tx_meta: Object.entries(S.txMeta).map(([tx, m]) => ({
           transaction_id: tx, practitioner_id: m.practitionerId, need_type: m.needType, region: m.region, provider_ids: m.providerIds || [],
           discover_context: m.discoverContext || null, match_error: m.matchError || null, offers: m.offers || [], created_at: m.createdAt,
+          request: m.title || m.description ? { title: m.title || null, description: m.description || null } : null,
         })),
         outbox: ob.toRows(S.outbox),
         subscriptions: Object.values(S.subscriptions || {}).map((x) => ({
@@ -187,6 +190,7 @@ function bppDb(pool, log) {
         S.txMeta[r.transaction_id] = {
           practitionerId: r.practitioner_id, needType: r.need_type, region: r.region, providerIds: r.provider_ids || [],
           discoverContext: r.discover_context, matchError: r.match_error, offers: r.offers || [], createdAt: iso(r.created_at),
+          ...(r.request ? { title: r.request.title || undefined, description: r.request.description || undefined } : {}),
         };
       }
       S.outbox = ob.fromRows(rows.outbox);
@@ -341,6 +345,11 @@ module.exports = function createV1Bpp(k) {
         coachId: n.coachId || null,
         transactionId: n.transactionId || null,
         updatedAt: n.updatedAt || null,
+        createdAt: n.createdAt || null,
+        title: (n.request && n.request.title) || null,
+        description: (n.request && n.request.description) || null,
+        completedAt: n.completedAt || null,
+        history: n.history || [],
         awaitingDecision: waiting ? { stage: waiting.action === 'confirm' ? 'confirm' : 'select_init', providerId: waiting.providerId, transactionId: waiting.context && waiting.context.transactionId } : null,
       };
     });
@@ -354,8 +363,30 @@ module.exports = function createV1Bpp(k) {
     );
   }
 
+  // ---- the need's own timeline (shared view) ----
+
+  function track(need, event, extra = {}) {
+    if (!need || !need.id) return;
+    need.history = need.history || [];
+    need.history.push({ at: nowIso(), event, status: need.status, ...extra });
+    if (need.history.length > 100) need.history.splice(0, need.history.length - 100);
+  }
+
   function onQueued(pending) {
     const need = k.needs.get(pending.needId) || {};
+    const txId = pending.context && pending.context.transactionId;
+    const meta = S.txMeta[txId] || {};
+    if (need.id) {
+      if (pending.action !== 'confirm') {
+        // A (new) request for this need: keep what was asked and when.
+        if (need.status === 'withdrawn') need.status = 'open'; // asked again after withdrawing
+        need.createdAt = need.createdAt || meta.createdAt || nowIso();
+        need.request = { transactionId: txId, title: meta.title || null, description: meta.description || null, requestedAt: meta.createdAt || nowIso() };
+        track(need, 'requested', { providerId: pending.providerId, transactionId: txId });
+      } else {
+        track(need, 'confirm_requested', { providerId: pending.providerId, transactionId: txId });
+      }
+    }
     emit('request.received', {
       transactionId: pending.context && pending.context.transactionId,
       practitionerId: need.naledisId,
@@ -413,6 +444,8 @@ module.exports = function createV1Bpp(k) {
       matchError,
       offers: [],
       createdAt: nowIso(),
+      title: decoded.title ? String(decoded.title).slice(0, 200) : undefined,
+      description: decoded.description ? String(decoded.description).slice(0, 2000) : undefined,
     };
     persist();
 
@@ -630,6 +663,12 @@ module.exports = function createV1Bpp(k) {
   // already gets status.changed from the buyer side, so this goes to
   // subscriptions only.
   function onNeedStatus(need, before, pending) {
+    const txId = pending.context && pending.context.transactionId;
+    const event = pending.action === 'confirm'
+      ? (need.status === 'fulfilled' ? 'fulfilled' : 'completion_declined')
+      : (need.status === 'reserved' ? 'accepted' : 'declined');
+    if (event === 'fulfilled') need.completedAt = nowIso();
+    track(need, event, { providerId: pending.providerId, transactionId: txId, ...(event === 'accepted' && need.coachId ? { coachId: need.coachId } : {}) });
     if (need.status === before) return;
     const naledi = k.naledis.get(need.naledisId) || {};
     notifySubscribers({
@@ -643,5 +682,21 @@ module.exports = function createV1Bpp(k) {
     });
   }
 
-  return { handle, handleDiscover, ensureNeed, onQueued, onNeedStatus, persist, restore, delegated: !!MATCH_URL, ready: store.ready, flush: store.flush };
+  // The practitioner withdrew the request (Beckn cancel); the backbone has
+  // already dropped any waiting request and released the need.
+  function onWithdrawn(need, before, providerId, txId) {
+    track(need, 'withdrawn', { providerId: providerId || null, transactionId: txId });
+    notifySubscribers({
+      event: 'status.changed',
+      epoch: S.epoch,
+      transactionId: txId || null,
+      practitionerId: need.naledisId || null,
+      providerId: providerId || null,
+      status: need.status,
+      payload: { needId: need.id, needType: need.type, region: (S.txMeta[txId] || {}).region || null, from: before, coachId: null },
+    });
+    persist();
+  }
+
+  return { handle, handleDiscover, ensureNeed, onQueued, onNeedStatus, onWithdrawn, persist, restore, delegated: !!MATCH_URL, ready: store.ready, flush: store.flush };
 };

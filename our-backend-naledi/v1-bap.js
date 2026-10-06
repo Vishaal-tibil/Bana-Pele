@@ -45,6 +45,8 @@ const SCHEMA = [
      created_at      timestamptz NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS transactions_practitioner ON transactions (practitioner_id)`,
+  // What the practitioner wrote when asking (title, description); added later, hence ALTER.
+  `ALTER TABLE transactions ADD COLUMN IF NOT EXISTS request jsonb`,
 ];
 
 const TABLES = {
@@ -52,8 +54,8 @@ const TABLES = {
   transactions: {
     pk: 'transaction_id',
     order: 'created_at',
-    cols: ['transaction_id', 'practitioner_id', 'need_type', 'region', 'status', 'order_status', 'need_id', 'provider_id', 'results', 'offers', 'created_at'],
-    json: ['results', 'offers'],
+    cols: ['transaction_id', 'practitioner_id', 'need_type', 'region', 'status', 'order_status', 'need_id', 'provider_id', 'results', 'offers', 'created_at', 'request'],
+    json: ['results', 'offers', 'request'],
   },
   outbox: OUTBOX_TABLE,
 };
@@ -68,6 +70,7 @@ function bapDb(pool, log) {
         transaction_id: tx.transactionId, practitioner_id: tx.practitionerId, need_type: tx.needType,
         region: tx.region || '', status: tx.status, order_status: tx.order.status, need_id: tx.order.needId,
         provider_id: tx.order.providerId, results: tx.results, offers: tx.offers, created_at: tx.createdAt,
+        request: tx.title || tx.description ? { title: tx.title || null, description: tx.description || null } : null,
       })),
       outbox: ob.toRows(S.outbox),
     }),
@@ -80,6 +83,7 @@ function bapDb(pool, log) {
           transactionId: r.transaction_id, practitionerId: r.practitioner_id, needType: r.need_type, region: r.region,
           createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at, status: r.status,
           results: r.results || [], offers: r.offers || [],
+          ...(r.request ? { title: r.request.title || undefined, description: r.request.description || undefined } : {}),
           order: { status: r.order_status, needId: r.need_id, providerId: r.provider_id },
           history: [], // the full history lives in tx_log
         };
@@ -132,6 +136,8 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
       transactionId: tx.transactionId,
       practitionerId: tx.practitionerId,
       needType: tx.needType,
+      title: tx.title || null,
+      description: tx.description || null,
       status: tx.order.status !== 'none' ? tx.order.status : tx.status,
       order: tx.order,
       resultsCount: tx.results.length,
@@ -231,6 +237,8 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
         practitionerId: String(b.practitionerId),
         needType: String(b.needType),
         region: b.region ? String(b.region) : '',
+        title: b.title ? String(b.title).slice(0, 200) : undefined,
+        description: b.description ? String(b.description).slice(0, 2000) : undefined,
         createdAt: nowIso(),
         status: 'searching',
         results: [],
@@ -243,7 +251,7 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
       store.save();
       const r = await trigger(
         'discover',
-        { needType: tx.needType, region: tx.region, practitionerId: tx.practitionerId, tier: b.tier, children: b.children },
+        { needType: tx.needType, region: tx.region, practitionerId: tx.practitionerId, tier: b.tier, children: b.children, title: tx.title, description: tx.description },
         transactionId,
         { ttl: DISCOVER_TTL }
       );
@@ -299,7 +307,7 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
       }
       const tx = S.transactions[b.transactionId];
       if (!tx) return send(res, 404, { error: 'unknown_transaction' });
-      const busy = ['pending', 'reserved', 'confirming', 'fulfilled'].includes(tx.order.status);
+      const busy = ['pending', 'reserved', 'confirming', 'fulfilled', 'withdrawing'].includes(tx.order.status);
       if (busy) {
         if (tx.order.providerId === b.providerId) return send(res, 200, { transactionId: tx.transactionId, status: tx.order.status, idempotent: true });
         return send(res, 409, { error: 'already_in_progress', status: tx.order.status, providerId: tx.order.providerId });
@@ -342,6 +350,39 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
         return send(res, 502, { transactionId: tx.transactionId, status: 'reserved', error: 'network_rejected', detail: (r.text || r.error || '').slice(0, 500) });
       }
       return send(res, 202, { transactionId: tx.transactionId, status: 'confirming' });
+    }
+
+    // Naledi no longer needs the help: withdraw the request (Beckn cancel).
+    if (req.method === 'POST' && path === '/v1/withdraw') {
+      const b = await readJson(req);
+      res.txId = b.transactionId;
+      if (!b.transactionId) return send(res, 400, { error: 'invalid_request', message: 'transactionId is required' });
+      const tx = S.transactions[b.transactionId];
+      if (!tx) return send(res, 404, { error: 'unknown_transaction' });
+      const st = tx.order.status;
+      if (st === 'withdrawn' || st === 'withdrawing') return send(res, 200, { transactionId: tx.transactionId, status: st, idempotent: true });
+      if (st === 'fulfilled') return send(res, 409, { error: 'already_fulfilled', status: st, message: 'the support was already delivered' });
+      if (!['pending', 'reserved', 'confirming'].includes(st)) {
+        // Nobody holds anything for this request yet: close it here.
+        const before = tx.order.status !== 'none' ? tx.order.status : tx.status;
+        tx.order.status = 'withdrawn';
+        note(tx, 'withdrawn before any provider took it', { reason: b.reason || null });
+        emit('status.changed', tx, { status: 'withdrawn', payload: { needId: tx.order.needId, from: before, reason: b.reason || null } });
+        store.save();
+        return send(res, 200, { transactionId: tx.transactionId, status: 'withdrawn' });
+      }
+      tx.order.status = 'withdrawing';
+      tx.order.withdrawnFrom = st;
+      note(tx, 'withdraw requested', { reason: b.reason || null });
+      store.save();
+      const r = await trigger('cancel', { needId: tx.order.needId, providerId: tx.order.providerId }, tx.transactionId);
+      if (!r.ok) {
+        tx.order.status = st;
+        note(tx, 'network rejected cancel', { detail: r.text || r.error });
+        store.save();
+        return send(res, 502, { transactionId: tx.transactionId, status: st, error: 'network_rejected', detail: (r.text || r.error || '').slice(0, 500) });
+      }
+      return send(res, 202, { transactionId: tx.transactionId, status: 'withdrawing' });
     }
 
     if (req.method === 'POST' && path === '/v1/admin/reset') {
@@ -413,6 +454,14 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
       if (tx.order.status !== before || (action === 'on_confirm' && code === 'REJECTED')) {
         emit('status.changed', tx, { status: tx.order.status, payload: { needId: tx.order.needId, code, from: before } });
       }
+    } else if (action === 'on_cancel') {
+      const contract = msg.contract || {};
+      const code = (((contract.commitments || [])[0] || {}).status || {}).code || (contract.status || {}).code;
+      const before = tx.order.status;
+      if (code === 'CANCELLED') tx.order.status = 'withdrawn';
+      else if (before === 'withdrawing') tx.order.status = tx.order.withdrawnFrom || 'reserved'; // refused: back to where it was
+      delete tx.order.withdrawnFrom;
+      if (tx.order.status !== before) emit('status.changed', tx, { status: tx.order.status, payload: { needId: tx.order.needId, code, from: before } });
     }
     store.save();
     return true;

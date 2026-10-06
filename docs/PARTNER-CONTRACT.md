@@ -38,7 +38,7 @@ Editor or Postman).
 
 | Call | When you call it | Body | Returns |
 |---|---|---|---|
-| `POST /v1/search` | Naledi signs up | `{ practitionerId, needType, region, tier, children }` | `202 { transactionId, status: "searching" }` |
+| `POST /v1/search` | Naledi signs up / asks for help | `{ practitionerId, needType, region, tier, children, title, description }` (`practitionerId` is your own user id, stored as given) | `202 { transactionId, status: "searching" }` |
 | `GET /v1/results/{transactionId}` | any time | none | providers found and offers received |
 | `GET /v1/status/{transactionId}` | any time | none | current status and details |
 | `GET /v1/log/{transactionId}` | support / debugging | none | every message and state change on both sides, in time order |
@@ -47,6 +47,7 @@ Editor or Postman).
 | `POST /v1/provider/decision` | WeHelp accepts or declines (and assigns a coach) | `{ transactionId, decision: "accept" or "decline", coachId }` | `200 { needStatus }` |
 | `POST /v1/confirm` | Naledi confirms | `{ transactionId, practitionerId, needType, providerId, note }` | `202 { status: "confirming" }` |
 | `POST /v1/provider/complete` | WeHelp marks the support delivered | `{ transactionId }` | `200 { needStatus: "fulfilled" }` |
+| `POST /v1/withdraw` | Naledi no longer needs the help | `{ transactionId, reason }` | `202 { status: "withdrawing" }` then `withdrawn`; `200` if nobody held it yet; `409 already_fulfilled` |
 | `POST /v1/admin/reset` | between rehearsals | none | `{ epoch }` |
 | `GET /v1/health` | monitoring (no key needed) | none | `{ ok, epoch, outboxPending }` |
 
@@ -153,13 +154,31 @@ Query (all optional): `practitionerId`, `status`, `providerId`, `needType`, `coa
     "needType": "registration", "region": "Alexandra",
     "status": "reserved", "providerId": "provider-wehelp", "providerName": "WeHelp",
     "coachId": "coach_thabo_nkosi", "transactionId": "34d3...", "updatedAt": "2026-10-06T09:12:03Z",
+    "createdAt": "2026-10-06T09:05:40Z", "title": "Register my ECD",
+    "description": "Help submitting DSD registration documents", "completedAt": null,
+    "history": [
+      { "at": "2026-10-06T09:06:02Z", "event": "requested", "status": "open", "providerId": "provider-wehelp", "transactionId": "34d3..." },
+      { "at": "2026-10-06T09:12:03Z", "event": "accepted", "status": "reserved", "providerId": "provider-wehelp", "coachId": "coach_thabo_nkosi", "transactionId": "34d3..." }
+    ],
     "awaitingDecision": null
 } ] }
 ```
 
-`status` is `open`, `reserved` or `fulfilled`. While a request waits for a
-provider, `awaitingDecision` is `{ stage, providerId, transactionId }` (`stage`
-is `select_init` or `confirm`).
+- `status`: `open` (nobody holds it), `reserved` (a provider accepted),
+  `fulfilled` (delivered) or `withdrawn` (the practitioner withdrew).
+- **Decline:** the need goes back to `open` with no provider, and `history` gets
+  a `declined` entry naming the provider. The practitioner's own request shows
+  `rejected` and they can ask another provider.
+- **Withdraw:** `POST /v1/withdraw` releases the provider and coach; status
+  `withdrawn`, `history` gets a `withdrawn` entry. Asking again re-opens it.
+- `history` events: `requested`, `accepted`, `declined`, `confirm_requested`,
+  `fulfilled`, `completion_declined`, `withdrawn`, each with `at`.
+- `createdAt` is the first search for this need; `title`/`description` come from
+  the latest one; `completedAt` is set when fulfilled.
+- One need per practitioner and need type: a need that is `fulfilled` cannot be
+  requested again (yet).
+- While a request waits for a provider, `awaitingDecision` is
+  `{ stage, providerId, transactionId }` (`stage` is `select_init` or `confirm`).
 
 ### `/v1/subscriptions` — tell an NGO portal when something matches
 

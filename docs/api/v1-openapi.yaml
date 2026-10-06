@@ -52,6 +52,8 @@ tags:
     description: The practitioner confirms support was received.
   - name: "7. Complete"
     description: The provider marks the support delivered.
+  - name: "Withdraw"
+    description: The practitioner no longer needs the help.
   - name: "Tracking"
     description: Status and log of a transaction.
   - name: "Coordination"
@@ -281,6 +283,45 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '502': { $ref: '#/components/responses/NetworkRejected' }
 
+  /v1/withdraw:
+    post:
+      tags: ["Withdraw"]
+      operationId: withdrawRequest
+      summary: Withdraw a request
+      description: |
+        The practitioner no longer needs the help. If a provider holds or is
+        deciding on the request, sends Beckn `cancel`; the status becomes
+        `withdrawing`, then `withdrawn`, and the provider and coach are released.
+        Before any provider is involved it is closed at once (200).
+        A fulfilled request cannot be withdrawn (409 `already_fulfilled`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transactionId]
+              properties:
+                transactionId: { type: string }
+                reason: { type: string }
+            example: { transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0, reason: No longer needed }
+      responses:
+        '202':
+          description: Cancel sent to the provider
+          content:
+            application/json:
+              schema: { type: object, properties: { transactionId: { type: string }, status: { type: string, enum: [withdrawing] } } }
+        '200':
+          description: Closed (nobody held it yet), or already withdrawn
+          content:
+            application/json:
+              schema: { type: object, properties: { transactionId: { type: string }, status: { type: string, enum: [withdrawn, withdrawing] }, idempotent: { type: boolean } } }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/UnknownTransaction' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/NetworkRejected' }
+
   /v1/provider/complete:
     post:
       tags: ["7. Complete"]
@@ -494,12 +535,34 @@ components:
         practitionerId: { type: string }
         needType: { $ref: '#/components/schemas/NeedType' }
         region: { type: string, nullable: true }
-        status: { type: string, enum: [open, reserved, fulfilled] }
+        status:
+          type: string
+          enum: [open, reserved, fulfilled, withdrawn]
+          description: |
+            open: nobody holds it (new, or a provider declined: see history).
+            reserved: a provider accepted. fulfilled: delivered.
+            withdrawn: the practitioner withdrew; asking again re-opens it.
         providerId: { type: string, nullable: true }
         providerName: { type: string, nullable: true }
         coachId: { type: string, nullable: true }
         transactionId: { type: string, nullable: true }
         updatedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time, nullable: true, description: When the practitioner first searched for this need }
+        title: { type: string, nullable: true, description: From the latest search for this need }
+        description: { type: string, nullable: true, description: From the latest search for this need }
+        completedAt: { type: string, format: date-time, nullable: true }
+        history:
+          type: array
+          description: Every change, oldest first.
+          items:
+            type: object
+            properties:
+              at: { type: string, format: date-time }
+              event: { type: string, enum: [requested, accepted, declined, confirm_requested, fulfilled, completion_declined, withdrawn] }
+              status: { type: string, description: The need's status after the event }
+              providerId: { type: string, nullable: true }
+              coachId: { type: string }
+              transactionId: { type: string }
         awaitingDecision:
           type: object
           nullable: true
@@ -528,8 +591,9 @@ components:
       description: |
         searching, results_ready, pending (waiting for the provider), reserved (provider accepted),
         confirming, fulfilled, rejected (declined, or the need was already taken),
-        error (the network refused the message).
-      enum: [searching, results_ready, pending, reserved, confirming, fulfilled, rejected, error]
+        error (the network refused the message),
+        withdrawing / withdrawn (the practitioner withdrew).
+      enum: [searching, results_ready, pending, reserved, confirming, fulfilled, rejected, withdrawing, withdrawn, error]
     SearchRequest:
       type: object
       required: [practitionerId, needType]
@@ -539,6 +603,8 @@ components:
         region: { type: string, example: Alexandra }
         tier: { type: string, example: Pre-Bronze }
         children: { type: integer, example: 28 }
+        title: { type: string, maxLength: 200, example: Register my ECD, description: Shown in the shared view }
+        description: { type: string, maxLength: 2000, example: Help submitting DSD registration documents, description: Shown in the shared view; travels to the provider side }
     ProviderResult:
       type: object
       properties:
