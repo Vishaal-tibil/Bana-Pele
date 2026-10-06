@@ -1,0 +1,19 @@
+# The only thing that should ever be exposed to the internet (tunnel THIS port,
+# 3010): the /v1 REST API for the partner backend, and nothing else.
+#
+# Everything else on the buyer app (the built-in page's /api/* routes and the
+# unauthenticated webhook the adapter calls back) stays on the internal
+# network, as do the adapters themselves.
+{
+    auto_https off
+    admin off
+}
+
+:3010 {
+    handle /v1/* {
+        reverse_proxy sandbox-bap:3001
+    }
+    handle {
+        respond "not found" 404
+    }
+}

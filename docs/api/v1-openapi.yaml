@@ -1,0 +1,646 @@
+openapi: 3.0.3
+info:
+  title: Naledi Network API (v1)
+  version: "1.2.0"
+  license:
+    name: Proprietary (Bana Pele A13 demo)
+  description: |
+    REST API for partner backends to reach the Naledi Beckn network. Each call
+    is translated into signed Beckn messages by the official onix adapters.
+
+    **Flow** (each step uses the `transactionId` returned in step 1):
+
+    1. `POST /v1/search`: find providers for a need
+    2. `GET /v1/results/{transactionId}`: see providers and offers
+    3. `POST /v1/provider/offer`: provider sends an offer (optional)
+    4. `POST /v1/select`: practitioner accepts a provider
+    5. `POST /v1/provider/decision`: provider accepts or declines
+    6. `POST /v1/confirm`: practitioner confirms support received
+    7. `POST /v1/provider/complete`: provider marks it delivered
+
+    Use `GET /v1/status/{transactionId}` at any time to track progress.
+
+    **Coordination (UC1):** `GET /v1/commitments` is the shared view of who
+    holds which need, and `/v1/subscriptions` lets an NGO portal be notified
+    of new matches, requests and status changes.
+
+    **Authentication:** header `X-Api-Key` on every call except `GET /v1/health`.
+    The base URL and key are shared privately.
+servers:
+  - url: "{baseUrl}"
+    description: naledi-edge. The address is sent to you privately.
+    variables:
+      baseUrl:
+        default: https://your-sandbox-address
+        description: The base URL we send you (tunnel or Azure sandbox)
+security:
+  - ApiKey: []
+tags:
+  - name: "Health"
+    description: Check that the network is up. No key needed.
+  - name: "1. Search"
+    description: Start a search for a practitioner's need.
+  - name: "2. Results"
+    description: Providers found and offers received.
+  - name: "3. Offer"
+    description: A matched provider sends an offer (optional).
+  - name: "4. Select"
+    description: The practitioner accepts a provider.
+  - name: "5. Decision"
+    description: The provider accepts or declines.
+  - name: "6. Confirm"
+    description: The practitioner confirms support was received.
+  - name: "7. Complete"
+    description: The provider marks the support delivered.
+  - name: "Tracking"
+    description: Status and log of a transaction.
+  - name: "Coordination"
+    description: Shared view of commitments and NGO subscriptions (UC1).
+  - name: "Admin"
+    description: Reset between test runs.
+
+paths:
+  /v1/health:
+    get:
+      tags: ["Health"]
+      operationId: checkHealth
+      summary: Check network health
+      description: No key needed. Use it for monitoring too.
+      security: []
+      responses:
+        '200':
+          description: Up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  epoch: { type: integer }
+                  eventsConfigured: { type: boolean }
+                  outboxPending: { type: integer }
+                  transactions: { type: integer }
+              example: { ok: true, epoch: 3, eventsConfigured: true, outboxPending: 0, transactions: 2 }
+
+  /v1/search:
+    post:
+      tags: ["1. Search"]
+      operationId: startSearch
+      summary: Start a search
+      description: |
+        Call it when the practitioner signs up or asks for help. Sends a Beckn
+        `discover` into the network with only the fields she agreed to share.
+        Keep the returned `transactionId` for all later calls.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SearchRequest' }
+            example: { practitionerId: prac_naledi_mahlangu, needType: registration, region: Alexandra, tier: Pre-Bronze, children: 28 }
+      responses:
+        '202':
+          description: Search sent. Results arrive shortly (see Get results).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transactionId: { type: string, format: uuid }
+                  status: { type: string, enum: [searching] }
+                  epoch: { type: integer }
+              example: { transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0, status: searching, epoch: 3 }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '502': { $ref: '#/components/responses/NetworkRejected' }
+
+  /v1/results/{transactionId}:
+    get:
+      tags: ["2. Results"]
+      operationId: getResults
+      summary: Get results
+      parameters: [ { $ref: '#/components/parameters/TransactionId' } ]
+      responses:
+        '200':
+          description: Results so far
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transactionId: { type: string }
+                  status: { $ref: '#/components/schemas/Status' }
+                  results: { type: array, items: { $ref: '#/components/schemas/ProviderResult' } }
+                  offers: { type: array, items: { $ref: '#/components/schemas/Offer' } }
+              example:
+                transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0
+                status: results_ready
+                results:
+                  - { providerId: provider-wehelp, name: WeHelp, kind: NGO, region: Alexandra, description: Registration guidance and DSD submission support., reasons: [Within your service area, registration is one of your support capabilities] }
+                offers: []
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/UnknownTransaction' }
+
+  /v1/provider/offer:
+    post:
+      tags: ["3. Offer"]
+      operationId: sendOffer
+      summary: Send an offer
+      description: |
+        Sent back to the practitioner as a second answer on her search. Only a
+        provider that matched the search can send one. Send your **own**
+        `offerId`, and match the `offer.received` event with it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transactionId, providerId, title]
+              properties:
+                transactionId: { type: string }
+                providerId: { type: string }
+                title: { type: string }
+                area: { type: string }
+                note: { type: string }
+                offerId: { type: string, description: Your own id. Generated if missing. }
+                providerName: { type: string }
+            example: { transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0, providerId: provider-wehelp, offerId: off_1001, title: Registration support, area: Alexandra, note: We can help with your DSD submission. }
+      responses:
+        '200':
+          description: Offer sent
+          content:
+            application/json:
+              schema: { type: object, properties: { offerId: { type: string }, status: { type: string, enum: [sent] } } }
+              example: { offerId: off_1001, status: sent }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/UnknownTransaction' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/NetworkOrProviderSideError' }
+
+  /v1/select:
+    post:
+      tags: ["4. Select"]
+      operationId: selectProvider
+      summary: Accept a provider
+      description: |
+        Sends Beckn `select` then `init`. The status becomes `pending` until
+        the provider decides. Repeating it for the same provider is
+        safe (200, `idempotent: true`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transactionId, practitionerId, needType, providerId]
+              properties:
+                transactionId: { type: string }
+                practitionerId: { type: string }
+                needType: { $ref: '#/components/schemas/NeedType' }
+                providerId: { type: string }
+            example: { transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0, practitionerId: prac_naledi_mahlangu, needType: registration, providerId: provider-wehelp }
+      responses:
+        '202':
+          description: Request sent to the provider
+          content:
+            application/json:
+              schema: { type: object, properties: { transactionId: { type: string }, status: { type: string, enum: [pending] } } }
+              example: { transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0, status: pending }
+        '200': { $ref: '#/components/responses/Idempotent' }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/UnknownTransaction' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/NetworkRejected' }
+
+  /v1/provider/decision:
+    post:
+      tags: ["5. Decision"]
+      operationId: decideRequest
+      summary: Accept or decline a request
+      description: |
+        Accept: the need becomes `reserved` for this provider. Decline: it is
+        open again and the practitioner sees `rejected`. If you answer very
+        quickly after the select, we wait up to 4 seconds for the request to arrive.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transactionId]
+              properties:
+                transactionId: { type: string }
+                decision: { type: string, enum: [accept, decline], default: accept }
+                coachId: { type: string }
+            example: { transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0, decision: accept, coachId: coach_thabo_nkosi }
+      responses:
+        '200': { $ref: '#/components/responses/DecisionDone' }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NoPendingRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/NetworkOrProviderSideError' }
+
+  /v1/confirm:
+    post:
+      tags: ["6. Confirm"]
+      operationId: confirmSupport
+      summary: Confirm support received
+      description: |
+        Needs a `reserved` request. Sends Beckn `confirm`.
+        The status becomes `confirming` until the provider completes.
+        Repeating it is safe. The `note` stays in our record and does not
+        travel through the network.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transactionId]
+              properties:
+                transactionId: { type: string }
+                practitionerId: { type: string }
+                needType: { $ref: '#/components/schemas/NeedType' }
+                providerId: { type: string }
+                note: { type: string }
+            example: { transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0, note: Registration documents submitted }
+      responses:
+        '202':
+          description: Confirm sent to the provider
+          content:
+            application/json:
+              schema: { type: object, properties: { transactionId: { type: string }, status: { type: string, enum: [confirming] } } }
+              example: { transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0, status: confirming }
+        '200': { $ref: '#/components/responses/Idempotent' }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/UnknownTransaction' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/NetworkRejected' }
+
+  /v1/provider/complete:
+    post:
+      tags: ["7. Complete"]
+      operationId: completeSupport
+      summary: Mark support delivered
+      description: The need becomes `fulfilled`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transactionId]
+              properties:
+                transactionId: { type: string }
+                decision: { type: string, enum: [accept, decline], default: accept }
+            example: { transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0 }
+      responses:
+        '200': { $ref: '#/components/responses/DecisionDone' }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NoPendingRequest' }
+        '502': { $ref: '#/components/responses/NetworkOrProviderSideError' }
+
+  /v1/status/{transactionId}:
+    get:
+      tags: ["Tracking"]
+      operationId: getStatus
+      summary: Get transaction status
+      parameters: [ { $ref: '#/components/parameters/TransactionId' } ]
+      responses:
+        '200':
+          description: Status and details
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransactionStatus' }
+              example:
+                transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0
+                practitionerId: prac_naledi_mahlangu
+                needType: registration
+                status: reserved
+                order: { status: reserved, needId: "prac_naledi_mahlangu:registration", providerId: provider-wehelp }
+                resultsCount: 1
+                offersCount: 1
+                createdAt: "2026-10-05T07:25:40.000Z"
+                epoch: 3
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/UnknownTransaction' }
+
+  /v1/log/{transactionId}:
+    get:
+      tags: ["Tracking"]
+      operationId: getLog
+      summary: Get transaction log
+      description: |
+        Every Beckn message in and out (`beckn.out`, `beckn.in`, `beckn.ack`),
+        every state change and every event, from sandbox-bap and sandbox-bpp,
+        in time order. Read from the database, so it survives restarts. For
+        support and debugging, not for driving your screens.
+      parameters: [ { $ref: '#/components/parameters/TransactionId' } ]
+      responses:
+        '200':
+          description: Log entries
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/LogEntry' } }
+              example:
+                - { at: "2026-10-05T07:25:40.101Z", service: sandbox-bap, level: info, event: tx.state, transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0, text: search requested }
+                - { at: "2026-10-05T07:25:40.104Z", service: sandbox-bap, level: info, event: beckn.out, transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0, action: discover, direction: out }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/UnknownTransaction' }
+
+  /v1/commitments:
+    get:
+      tags: ["Coordination"]
+      operationId: listCommitments
+      summary: List commitments (who holds which need)
+      description: |
+        The per-Naledi shared view: every need, its status and the provider
+        holding it, so NGOs can see what is already being handled and avoid
+        duplicate work. All filters are optional and combine.
+      parameters:
+        - { name: practitionerId, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [open, reserved, fulfilled] } }
+        - { name: providerId, in: query, schema: { type: string } }
+        - { name: needType, in: query, schema: { $ref: '#/components/schemas/NeedType' } }
+      responses:
+        '200':
+          description: Matching commitments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  commitments: { type: array, items: { $ref: '#/components/schemas/Commitment' } }
+              example:
+                count: 1
+                commitments:
+                  - { needId: "prac_naledi_mahlangu:registration", practitionerId: prac_naledi_mahlangu, needType: registration, region: Alexandra, status: reserved, providerId: provider-wehelp, providerName: WeHelp, coachId: coach_thabo_nkosi, transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0, updatedAt: "2026-10-06T08:12:40.000Z", awaitingDecision: null }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '502': { $ref: '#/components/responses/NetworkOrProviderSideError' }
+
+  /v1/subscriptions:
+    get:
+      tags: ["Coordination"]
+      operationId: listSubscriptions
+      summary: List NGO subscriptions
+      description: Secrets are never returned here.
+      responses:
+        '200':
+          description: All subscriptions
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Subscription' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: ["Coordination"]
+      operationId: createSubscription
+      summary: Subscribe an NGO to network events
+      description: |
+        We POST each matching event to `url`, with the header
+        `X-Api-Key: <secret>`, in the same format as the partner events
+        (see `docs/PARTNER-CONTRACT.md`). Failed deliveries are retried with
+        backoff, in order, per subscription; answer with any 2xx. Ignore an
+        `eventId` you have already handled. The `secret` is returned only in
+        this response: send your own, or keep the generated one.
+        Empty filter lists mean "all".
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, format: uri }
+                name: { type: string }
+                secret: { type: string, description: Sent back in X-Api-Key on every delivery. Generated if missing. }
+                providerIds: { type: array, items: { type: string } }
+                needTypes: { type: array, items: { $ref: '#/components/schemas/NeedType' } }
+                regions: { type: array, items: { type: string } }
+                events:
+                  type: array
+                  items: { type: string, enum: [practitioner.matched, request.received, status.changed] }
+                  description: Defaults to practitioner.matched and request.received.
+            example: { name: WeHelp portal, url: "https://ngo-portal.example/network/events", providerIds: [provider-wehelp], needTypes: [registration], events: [practitioner.matched, request.received, status.changed] }
+      responses:
+        '201':
+          description: Created. The only response that includes the secret.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Subscription' }
+                  - { type: object, properties: { secret: { type: string } } }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/subscriptions/{subscriptionId}:
+    delete:
+      tags: ["Coordination"]
+      operationId: deleteSubscription
+      summary: Unsubscribe
+      parameters:
+        - { name: subscriptionId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema: { type: object, properties: { id: { type: string }, deleted: { type: boolean } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: unknown_subscription, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /v1/admin/reset:
+    post:
+      tags: ["Admin"]
+      operationId: resetSandbox
+      summary: Reset sandbox state
+      description: Increases `epoch`. When an event carries a new epoch, drop the network state you hold. The log is kept.
+      responses:
+        '200':
+          description: Reset
+          content:
+            application/json:
+              schema: { type: object, properties: { epoch: { type: integer }, providerSide: { type: string } } }
+              example: { epoch: 4, providerSide: ok }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+components:
+  securitySchemes:
+    ApiKey:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: Sent to you privately. We send the same header when we call your /network/* endpoints.
+  parameters:
+    TransactionId:
+      name: transactionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+      description: Returned by POST /v1/search. Keep it on the practitioner's record.
+  schemas:
+    Commitment:
+      type: object
+      properties:
+        needId: { type: string }
+        practitionerId: { type: string }
+        needType: { $ref: '#/components/schemas/NeedType' }
+        region: { type: string, nullable: true }
+        status: { type: string, enum: [open, reserved, fulfilled] }
+        providerId: { type: string, nullable: true }
+        providerName: { type: string, nullable: true }
+        coachId: { type: string, nullable: true }
+        transactionId: { type: string, nullable: true }
+        updatedAt: { type: string, format: date-time, nullable: true }
+        awaitingDecision:
+          type: object
+          nullable: true
+          description: A request waiting for a provider's decision on this need.
+          properties:
+            stage: { type: string, enum: [select_init, confirm] }
+            providerId: { type: string }
+            transactionId: { type: string }
+    Subscription:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string, nullable: true }
+        url: { type: string }
+        providerIds: { type: array, items: { type: string } }
+        needTypes: { type: array, items: { type: string } }
+        regions: { type: array, items: { type: string } }
+        events: { type: array, items: { type: string } }
+        createdAt: { type: string, format: date-time }
+    NeedType:
+      type: string
+      description: The ten need types the network understands.
+      enum: [registration, infrastructure, learning-skilling, health-safety, nutrition, child-development, starter-kit, capability-development, fundraising, peer-guidance]
+    Status:
+      type: string
+      description: |
+        searching, results_ready, pending (waiting for the provider), reserved (provider accepted),
+        confirming, fulfilled, rejected (declined, or the need was already taken),
+        error (the network refused the message).
+      enum: [searching, results_ready, pending, reserved, confirming, fulfilled, rejected, error]
+    SearchRequest:
+      type: object
+      required: [practitionerId, needType]
+      properties:
+        practitionerId: { type: string, description: Your own id for the practitioner }
+        needType: { $ref: '#/components/schemas/NeedType' }
+        region: { type: string, example: Alexandra }
+        tier: { type: string, example: Pre-Bronze }
+        children: { type: integer, example: 28 }
+    ProviderResult:
+      type: object
+      properties:
+        providerId: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [NGO, Thabo] }
+        description: { type: string }
+        region: { type: string }
+        reasons: { type: array, items: { type: string } }
+    Offer:
+      type: object
+      properties:
+        offerId: { type: string }
+        title: { type: string }
+        area: { type: string }
+        note: { type: string }
+        providerId: { type: string }
+        providerName: { type: string }
+        receivedAt: { type: string, format: date-time }
+    TransactionStatus:
+      type: object
+      properties:
+        transactionId: { type: string }
+        practitionerId: { type: string }
+        needType: { $ref: '#/components/schemas/NeedType' }
+        status: { $ref: '#/components/schemas/Status' }
+        order:
+          type: object
+          properties:
+            status: { type: string, description: "none until a provider is requested, then the order's status" }
+            needId: { type: string, nullable: true }
+            providerId: { type: string, nullable: true }
+        resultsCount: { type: integer }
+        offersCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+        results: { type: array, items: { $ref: '#/components/schemas/ProviderResult' } }
+        offers: { type: array, items: { $ref: '#/components/schemas/Offer' } }
+        epoch: { type: integer }
+    LogEntry:
+      type: object
+      required: [at, service, level, event]
+      properties:
+        at: { type: string, format: date-time }
+        service: { type: string, enum: [sandbox-bap, sandbox-bpp] }
+        level: { type: string, enum: [debug, info, warn, error] }
+        event: { type: string, example: beckn.out }
+        transactionId: { type: string }
+        messageId: { type: string }
+        action: { type: string, example: discover }
+        direction: { type: string, enum: [in, out] }
+        body: { description: 'The Beckn message (for beckn.in and beckn.out)' }
+      additionalProperties: true
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+        message: { type: string }
+        detail: { type: string }
+        stage: { type: string, description: 'Which step was waiting (init or confirm), for no_pending_request' }
+  responses:
+    NoPendingRequest:
+      description: no_pending_request (nothing is waiting for a decision on this transaction)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: no_pending_request, stage: init }
+    NetworkOrProviderSideError:
+      description: network_rejected (the network refused the message) or provider_side_unreachable (the provider app could not be reached)
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    InvalidRequest:
+      description: invalid_request (a required field is missing, or the body is not JSON)
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Unauthorized:
+      description: unauthorized (missing or wrong X-Api-Key)
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    UnknownTransaction:
+      description: unknown_transaction
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Conflict:
+      description: already_in_progress, not_reserved, provider_not_matched or request_not_ready (the step is not allowed right now)
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NetworkRejected:
+      description: network_rejected (the network refused the message; `detail` says why)
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Idempotent:
+      description: Already done for this transaction (safe repeat)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              transactionId: { type: string }
+              status: { type: string }
+              idempotent: { type: boolean, enum: [true] }
+    DecisionDone:
+      description: Decision applied
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              ok: { type: boolean }
+              decision: { type: string }
+              stage: { type: string, enum: [init, confirm] }
+              needId: { type: string }
+              needStatus: { type: string, enum: [open, reserved, fulfilled] }
