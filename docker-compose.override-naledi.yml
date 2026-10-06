@@ -31,10 +31,25 @@ services:
   # SIGTERM (a graceful stop, exit 0 -- not a crash) after it's been up for a
   # while. The base file gives it no restart policy, so it would stay down and
   # take onix-bap/onix-bpp down with it (both depend on it).
+  # Only the edge is reachable from outside (see the edge block below). The base
+  # file publishes these ports on every interface, which would let anyone on the
+  # network reach Redis, the adapters and the apps directly and skip /v1 entirely.
+  # !reset clears the base list; without it compose would merge and keep them.
   redis:
+    ports: !reset []
     restart: unless-stopped
 
+  onix-bap:
+    ports: !reset []
+
+  onix-bpp:
+    ports: !reset []
+
+  beckn-router:
+    ports: !reset []
+
   sandbox-bap:
+    ports: !reset []
     command: ["node", "frontdoor-bap-server.js"]
     build:
       context: ./our-backend-naledi
@@ -71,6 +86,7 @@ services:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/api/health"]
 
   sandbox-bpp:
+    ports: !reset []
     command: ["node", "backbone-bpp-server.js"]
     build:
       context: ./our-backend-naledi
