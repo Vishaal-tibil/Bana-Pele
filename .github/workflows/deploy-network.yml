@@ -1,0 +1,105 @@
+name: Deploy network stack to Azure Container Apps
+
+# Runs tools/azure/deploy.sh: builds naledi-bap / naledi-bpp, mirrors the onix,
+# redis and caddy images into ACR, ensures the databases, uploads the adapter
+# configs and (re)deploys the single "naledi-stack" container app.
+#
+# The workflow file itself is not in the paths filter, so adding or editing it
+# does not trigger a deploy. Use "Run workflow" to deploy on demand.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'our-backend-naledi/**'
+      - 'edge.Caddyfile'
+      - 'tools/azure/deploy.sh'
+  workflow_dispatch:
+
+# Only one deploy at a time; the app must stay at exactly one replica.
+concurrency:
+  group: deploy-network
+  cancel-in-progress: false
+
+permissions:
+  id-token: write # OIDC login to Azure
+  contents: read
+
+env:
+  RG: ${{ vars.AZURE_RESOURCE_GROUP || 'bana-pele' }}
+  ENV_NAME: ${{ vars.CONTAINER_APPS_ENV || 'banapele-container-app-environment' }}
+  ACR: ${{ vars.ACR_NAME || 'banapele' }}
+  PG: ${{ vars.POSTGRES_SERVER || 'bana-pele-database' }}
+  IDENTITY: ${{ vars.APPS_IDENTITY_NAME || 'id-bana-pele-apps' }}
+  STARTER_KIT_REF: ${{ vars.STARTER_KIT_REF || '' }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check required secrets
+        env:
+          API_KEY: ${{ secrets.NETWORK_API_KEY }}
+          INTERNAL_KEY: ${{ secrets.NETWORK_INTERNAL_KEY }}
+          DB_PASSWORD: ${{ secrets.PG_ADMIN_PASSWORD }}
+          AZ_CLIENT: ${{ secrets.AZURE_CLIENT_ID }}
+          AZ_TENANT: ${{ secrets.AZURE_TENANT_ID }}
+          AZ_SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          missing=""
+          for v in API_KEY INTERNAL_KEY DB_PASSWORD AZ_CLIENT AZ_TENANT AZ_SUB; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing GitHub secrets for:$missing (NETWORK_API_KEY, NETWORK_INTERNAL_KEY, PG_ADMIN_PASSWORD, AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID)"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get the Beckn starter kit config
+        run: |
+          git clone --depth 1 https://github.com/beckn/starter-kit.git "$HOME/starter-kit"
+          if [ -n "$STARTER_KIT_REF" ]; then
+            git -C "$HOME/starter-kit" fetch --depth 1 origin "$STARTER_KIT_REF"
+            git -C "$HOME/starter-kit" checkout FETCH_HEAD
+          fi
+          CONFIG_DIR="$HOME/starter-kit/generic-devkit/config"
+          test -f "$CONFIG_DIR/generic-bap.yaml" && test -f "$CONFIG_DIR/generic-bpp.yaml"
+          # Same change setup.sh makes: our provider adapter answers "discover".
+          ROUTING="$CONFIG_DIR/generic-routing-BAPCaller.yaml"
+          test -f "$ROUTING"
+          sed -i -E 's#^([[:space:]]*url:[[:space:]]*)"[^"]*"#\1"http://onix-bpp:8082/bpp/receiver"#' "$ROUTING"
+          grep -Eq '^[[:space:]]*url:[[:space:]]*"http://onix-bpp:8082/bpp/receiver"' "$ROUTING"
+          echo "CONFIG_DIR=$CONFIG_DIR" >> "$GITHUB_ENV"
+
+      - name: Seed the stable keys (so every deploy reuses the same ones)
+        env:
+          API_KEY: ${{ secrets.NETWORK_API_KEY }}
+          INTERNAL_KEY: ${{ secrets.NETWORK_INTERNAL_KEY }}
+        run: |
+          SECRETS_FILE="$RUNNER_TEMP/naledi-secrets"
+          umask 077
+          printf 'API_KEY=%s\nINTERNAL_KEY=%s\n' "$API_KEY" "$INTERNAL_KEY" > "$SECRETS_FILE"
+          echo "SECRETS_FILE=$SECRETS_FILE" >> "$GITHUB_ENV"
+
+      - name: Deploy
+        env:
+          DB_USER: ${{ vars.PG_ADMIN_USER }}
+          DB_PASSWORD: ${{ secrets.PG_ADMIN_PASSWORD }}
+          BAP_ID: ${{ vars.BAP_ID || 'bap.example.com' }}
+          BPP_ID: ${{ vars.BPP_ID || 'bpp.example.com' }}
+          MATCH_URL: ${{ vars.MATCH_URL }}
+          EVENTS_URL: ${{ vars.EVENTS_URL }}
+          LOCAL_BUILD: '1' # build on the runner with Docker; the shared registry is ABAC
+        run: bash tools/azure/deploy.sh
