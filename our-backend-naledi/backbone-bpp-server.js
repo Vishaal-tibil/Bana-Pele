@@ -363,6 +363,7 @@ function handleAction(action, incoming) {
   if (action === 'select') {
     const { needId, providerId } = extractFromContract(message);
     v1.ensureNeed(needId); // /v1 needs are created on first sight
+    v1.reopenIfFulfilled(needId); // a finished need can be asked again, as a new round
     const need = needs.get(needId);
     if (!need) {
       rejectNow(context, needId, providerId, 'on_init'); // unknown need: nothing to reserve
@@ -370,9 +371,10 @@ function handleAction(action, incoming) {
     }
     // Same request repeated on the same transaction: ignore, it is already queued.
     if (pendingRequests.some((p) => p.needId === needId && p.context && p.context.transactionId === context.transactionId)) return;
-    // Server-side duplicate protection: a need that is already reserved or
-    // fulfilled, or that another request is already waiting on, cannot be
-    // taken again. (Approve/reject is the only thing that changes it.)
+    // Server-side duplicate protection: a need that is already reserved, or
+    // that another request is already waiting on, cannot be taken again.
+    // (Approve/reject is the only thing that changes it. A fulfilled need was
+    // just reopened above, so it reaches here as 'open'.)
     if (!['open', 'withdrawn'].includes(need.status) || pendingRequests.some((p) => p.needId === needId)) {
       rejectNow(context, needId, providerId, 'on_init');
       return;
