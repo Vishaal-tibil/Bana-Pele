@@ -287,6 +287,16 @@ if az containerapp show -g "$RG" -n "$APP" -o none 2>/dev/null; then
   # The identity is attached above; leave it out of the update itself.
   awk '/^identity:/{skip=1; next} /^properties:/{skip=0} !skip' "$YAML" > "$YAML.update"
   az containerapp update -g "$RG" -n "$APP" --yaml "$YAML.update" -o none
+  # Only one instance may write to the database (single-writer lock), but
+  # Container Apps keeps the old revision running until the new one is
+  # healthy, so the new one could never start. Stop the old revision and
+  # restart the new one (about a minute of downtime).
+  NEW_REV="$(az containerapp show -g "$RG" -n "$APP" --query properties.latestRevisionName -o tsv)"
+  for r in $(az containerapp revision list -g "$RG" -n "$APP" --query "[?properties.active && name!='$NEW_REV'].name" -o tsv); do
+    echo "deactivating old revision $r (it holds the database writer lock)"
+    az containerapp revision deactivate -g "$RG" -n "$APP" --revision "$r" -o none || true
+  done
+  az containerapp revision restart -g "$RG" -n "$APP" --revision "$NEW_REV" -o none || true
 else
   az containerapp create -g "$RG" -n "$APP" --yaml "$YAML" -o none
 fi

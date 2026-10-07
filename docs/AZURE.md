@@ -43,7 +43,9 @@ needs AcrPull), and only adds the `naledi_bap`/`naledi_bpp` databases.
 
 Optional: `MATCH_URL`, `EVENTS_URL` (partner), `BAP_ID`/`BPP_ID` (after 6.7),
 `ENV_NAME` (default `cae-naledi`), `CREATE_ENV=1 LOCATION=<region>` if the
-environment does not exist. Re-running redeploys with a new image tag.
+environment does not exist. Re-running redeploys with a new image tag; it stops the
+old revision first (only one instance may write to the database), so expect about a
+minute of downtime. Keep `MATCH_URL`/`EVENTS_URL` on every redeploy.
 Generated secrets are kept in `~/.naledi-azure-secrets` on the machine that ran it.
 
 At the end it prints the base URL; then:
