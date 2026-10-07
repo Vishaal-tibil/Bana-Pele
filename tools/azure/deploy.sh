@@ -119,14 +119,21 @@ ACR_PASS=""
 [ -z "${ID_RES:-}" ] && ACR_PASS="$(az acr credential show -n "$ACR" --query 'passwords[0].value' -o tsv)"
 
 say "3/6 PostgreSQL $PG"
+# Databases and firewall rules through the Azure REST API: the az postgres
+# sub-command flags differ between CLI versions, the REST paths do not.
+pg_api() { # pg_api METHOD sub-path [az rest args...]
+  local m="$1" sub="$2"; shift 2
+  local id; id="$(az postgres flexible-server show -g "$RG" -n "$PG" --query id -o tsv)"
+  az rest --method "$m" --url "https://management.azure.com${id}/${sub}?api-version=2022-12-01" "$@"
+}
 if az postgres flexible-server show -g "$RG" -n "$PG" -o none 2>/dev/null; then
   # Existing (shared) server: use the login you were given; nothing is stored in the script.
   PG_ADMIN="${DB_USER:-$(az postgres flexible-server show -g "$RG" -n "$PG" --query administratorLogin -o tsv)}"
   [ -n "${DB_PASSWORD:-}" ] || { read -r -s -p "Password for $PG_ADMIN on $PG: " DB_PASSWORD; echo; }
   PG_PASSWORD="$DB_PASSWORD"
-  if [ -z "$(az postgres flexible-server firewall-rule list -g "$RG" -n "$PG" --query "[?startIpAddress=='0.0.0.0' && endIpAddress=='0.0.0.0'].name" -o tsv)" ]; then
+  if [ -z "$(pg_api GET firewallRules --query "value[?properties.startIpAddress=='0.0.0.0' && properties.endIpAddress=='0.0.0.0'].name" -o tsv 2>/dev/null)" ]; then
     echo "warning: $PG has no 'allow Azure services' firewall rule; the app may not reach it. Ask the owner, or run:"
-    echo "  az postgres flexible-server firewall-rule create -g $RG -n $PG -r AllowAzureServices --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0"
+    echo "  az postgres flexible-server firewall-rule create -g $RG --server-name $PG --name AllowAzureServices --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0"
   fi
 else
   newsecret PG_PASSWORD; . "$SECRETS_FILE"
@@ -136,8 +143,13 @@ else
     --public-access 0.0.0.0 --yes -o none   # 0.0.0.0 = allow Azure services only
 fi
 for db in naledi_bap naledi_bpp; do
-  az postgres flexible-server db show -g "$RG" -s "$PG" -d "$db" -o none 2>/dev/null \
-    || az postgres flexible-server db create -g "$RG" -s "$PG" -d "$db" -o none
+  if pg_api GET "databases/$db" -o none 2>/dev/null; then echo "  database $db exists"
+  else
+    pg_api PUT "databases/$db" --body '{"properties":{"charset":"UTF8","collation":"en_US.utf8"}}' -o none
+    for i in $(seq 1 30); do pg_api GET "databases/$db" -o none 2>/dev/null && break; sleep 5; done
+    pg_api GET "databases/$db" -o none 2>/dev/null || { echo "database $db was not created"; exit 1; }
+    echo "  created database $db"
+  fi
 done
 PG_HOST="$(az postgres flexible-server show -g "$RG" -n "$PG" --query fullyQualifiedDomainName -o tsv)"
 BAP_DB="postgres://$(urlenc "$PG_ADMIN"):$(urlenc "$PG_PASSWORD")@$PG_HOST:5432/naledi_bap?sslmode=require"
