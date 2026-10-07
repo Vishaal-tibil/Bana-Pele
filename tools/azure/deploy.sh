@@ -85,12 +85,34 @@ if [ "$(az acr show -n "$ACR" --query adminUserEnabled -o tsv)" != "true" ]; the
     echo "warning: identity $IDENTITY has no AcrPull on $ACR yet; the app will fail to pull images until an Owner grants it"
   fi
 fi
-for side in bap:frontdoor-bap-server.js bpp:backbone-bpp-server.js; do
-  az acr build -r "$ACR" -t "naledi-${side%%:*}:$TAG" --build-arg "SERVER_FILE=${side#*:}" our-backend-naledi --only-show-errors -o none
-done
+# Build in the registry (ACR Tasks) when it allows it; otherwise build here with
+# Docker and push (a registry with token-based auth off refuses ACR Tasks pushes).
+LOGIN_SERVER="$(az acr show -n "$ACR" --query loginServer -o tsv)"
+build_local() {
+  command -v docker >/dev/null || { echo "docker is needed to build the images here"; exit 1; }
+  az acr login -n "$ACR" --only-show-errors >/dev/null
+  for side in bap:frontdoor-bap-server.js bpp:backbone-bpp-server.js; do
+    docker build -q -t "$LOGIN_SERVER/naledi-${side%%:*}:$TAG" --build-arg "SERVER_FILE=${side#*:}" our-backend-naledi >/dev/null
+    docker push -q "$LOGIN_SERVER/naledi-${side%%:*}:$TAG" >/dev/null
+    echo "  pushed naledi-${side%%:*}:$TAG"
+  done
+}
+if [ "${LOCAL_BUILD:-0}" = 1 ]; then
+  build_local
+else
+  built=1
+  for side in bap:frontdoor-bap-server.js bpp:backbone-bpp-server.js; do
+    az acr build -r "$ACR" -t "naledi-${side%%:*}:$TAG" --build-arg "SERVER_FILE=${side#*:}" our-backend-naledi --only-show-errors -o none || { built=0; break; }
+  done
+  [ "$built" = 1 ] || { echo "  building in the registry failed; building here with Docker instead"; build_local; }
+fi
 # Mirror the public images so pulls never hit Docker Hub limits.
 for img in fidedocker/onix-adapter:latest library/redis:alpine library/caddy:alpine; do
-  az acr import -n "$ACR" --source "docker.io/$img" --image "${img#library/}" --force -o none
+  az acr import -n "$ACR" --source "docker.io/$img" --image "${img#library/}" --force -o none 2>/dev/null || {
+    echo "  import of $img failed; copying it with Docker instead"
+    az acr login -n "$ACR" --only-show-errors >/dev/null
+    docker pull -q "docker.io/$img" >/dev/null && docker tag "docker.io/$img" "$LOGIN_SERVER/${img#library/}" && docker push -q "$LOGIN_SERVER/${img#library/}" >/dev/null
+  }
 done
 ACR_SERVER="$(az acr show -n "$ACR" --query loginServer -o tsv)"
 ACR_PASS=""
