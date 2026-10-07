@@ -28,6 +28,19 @@ az login
 RG=<resource-group> CONFIG_DIR=~/starter-kit/generic-devkit/config bash tools/azure/deploy.sh
 ```
 
+**Shared resources (the `bana-pele` group):** reuse the existing registry,
+database and identity instead of creating new ones:
+
+```bash
+RG=bana-pele ENV_NAME=banapele-container-app-environment ACR=banapele \
+PG=bana-pele-database IDENTITY=id-bana-pele-apps \
+CONFIG_DIR=~/starter-kit/generic-devkit/config bash tools/azure/deploy.sh
+```
+
+It asks for the database password (or set `DB_USER`/`DB_PASSWORD`), never
+switches on the shared registry's admin user (pulls with `IDENTITY`, which
+needs AcrPull), and only adds the `naledi_bap`/`naledi_bpp` databases.
+
 Optional: `MATCH_URL`, `EVENTS_URL` (partner), `BAP_ID`/`BPP_ID` (after 6.7),
 `ENV_NAME` (default `cae-naledi`), `CREATE_ENV=1 LOCATION=<region>` if the
 environment does not exist. Re-running redeploys with a new image tag.

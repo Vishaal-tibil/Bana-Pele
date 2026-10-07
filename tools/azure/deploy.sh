@@ -40,6 +40,7 @@ PG="${PG:-pg-naledi-$SUFFIX}"
 PG_ADMIN="${PG_ADMIN:-naledi}"
 SA="${SA:-stnaledi$SUFFIX}"
 SHARE="naledi-config"
+IDENTITY="${IDENTITY:-}"                 # user-assigned identity that may pull from the registry (shared registry)
 BAP_ID="${BAP_ID:-bap.example.com}"      # task 6.7: our own ids once registered in DeDi
 BPP_ID="${BPP_ID:-bpp.example.com}"
 SECRETS_FILE="${SECRETS_FILE:-$HOME/.naledi-azure-secrets}"   # kept on your machine only
@@ -55,9 +56,11 @@ touch "$SECRETS_FILE"; chmod 600 "$SECRETS_FILE"
 # shellcheck disable=SC1090
 . "$SECRETS_FILE"
 newsecret() { grep -q "^$1=" "$SECRETS_FILE" || echo "$1=$(openssl rand -hex 24)" >> "$SECRETS_FILE"; }
-newsecret API_KEY; newsecret INTERNAL_KEY; newsecret PG_PASSWORD
+newsecret API_KEY; newsecret INTERNAL_KEY
 # shellcheck disable=SC1090
 . "$SECRETS_FILE"
+# URL-encode a value for use inside a postgres:// URL.
+urlenc() { local s="$1" o="" c i; for ((i=0; i<${#s}; i++)); do c="${s:i:1}"; case "$c" in [a-zA-Z0-9._~-]) o+="$c" ;; *) o+=$(printf '%%%02X' "'$c") ;; esac; done; printf '%s' "$o"; }
 
 say "1/6 Container Apps environment $ENV_NAME"
 if ! az containerapp env show -g "$RG" -n "$ENV_NAME" -o none 2>/dev/null; then
@@ -68,32 +71,89 @@ LOCATION="$(az containerapp env show -g "$RG" -n "$ENV_NAME" --query location -o
 echo "location $LOCATION"
 
 say "2/6 Registry $ACR and images (tag $TAG)"
-az acr show -n "$ACR" -o none 2>/dev/null || az acr create -g "$RG" -n "$ACR" --sku Basic --admin-enabled true -o none
-az acr update -n "$ACR" --admin-enabled true -o none
-for side in bap:frontdoor-bap-server.js bpp:backbone-bpp-server.js; do
-  az acr build -r "$ACR" -t "naledi-${side%%:*}:$TAG" --build-arg "SERVER_FILE=${side#*:}" our-backend-naledi --only-show-errors -o none
-done
+if ! az acr show -n "$ACR" -o none 2>/dev/null; then
+  az acr create -g "$RG" -n "$ACR" --sku Basic --admin-enabled true -o none
+fi
+# A shared registry with the admin user off is pulled from with a managed identity
+# (IDENTITY); we never switch the admin user on for someone else's registry.
+if [ "$(az acr show -n "$ACR" --query adminUserEnabled -o tsv)" != "true" ]; then
+  [ -n "$IDENTITY" ] || { echo "registry $ACR has the admin user off: set IDENTITY to a user-assigned identity with AcrPull on it"; exit 1; }
+  ID_RES="$(az identity show -g "$RG" -n "$IDENTITY" --query id -o tsv)"
+  ID_PRINCIPAL="$(az identity show -g "$RG" -n "$IDENTITY" --query principalId -o tsv)"
+  ACR_ID="$(az acr show -n "$ACR" --query id -o tsv)"
+  if [ -z "$(az role assignment list --assignee "$ID_PRINCIPAL" --scope "$ACR_ID" --include-inherited --query "[?roleDefinitionName=='AcrPull' || roleDefinitionName=='AcrPush' || roleDefinitionName=='Owner' || roleDefinitionName=='Contributor'].roleDefinitionName" -o tsv)" ]; then
+    echo "warning: identity $IDENTITY has no AcrPull on $ACR yet; the app will fail to pull images until an Owner grants it"
+  fi
+fi
+# Build in the registry (ACR Tasks) when it allows it; otherwise build here with
+# Docker and push (a registry with token-based auth off refuses ACR Tasks pushes).
+LOGIN_SERVER="$(az acr show -n "$ACR" --query loginServer -o tsv)"
+build_local() {
+  command -v docker >/dev/null || { echo "docker is needed to build the images here"; exit 1; }
+  az acr login -n "$ACR" --only-show-errors >/dev/null
+  for side in bap:frontdoor-bap-server.js bpp:backbone-bpp-server.js; do
+    docker build -q -t "$LOGIN_SERVER/naledi-${side%%:*}:$TAG" --build-arg "SERVER_FILE=${side#*:}" our-backend-naledi >/dev/null
+    docker push -q "$LOGIN_SERVER/naledi-${side%%:*}:$TAG" >/dev/null
+    echo "  pushed naledi-${side%%:*}:$TAG"
+  done
+}
+if [ "${LOCAL_BUILD:-0}" = 1 ]; then
+  build_local
+else
+  built=1
+  for side in bap:frontdoor-bap-server.js bpp:backbone-bpp-server.js; do
+    az acr build -r "$ACR" -t "naledi-${side%%:*}:$TAG" --build-arg "SERVER_FILE=${side#*:}" our-backend-naledi --only-show-errors -o none || { built=0; break; }
+  done
+  [ "$built" = 1 ] || { echo "  building in the registry failed; building here with Docker instead"; build_local; }
+fi
 # Mirror the public images so pulls never hit Docker Hub limits.
 for img in fidedocker/onix-adapter:latest library/redis:alpine library/caddy:alpine; do
-  az acr import -n "$ACR" --source "docker.io/$img" --image "${img#library/}" --force -o none
+  az acr import -n "$ACR" --source "docker.io/$img" --image "${img#library/}" --force -o none 2>/dev/null || {
+    echo "  import of $img failed; copying it with Docker instead"
+    az acr login -n "$ACR" --only-show-errors >/dev/null
+    docker pull -q "docker.io/$img" >/dev/null && docker tag "docker.io/$img" "$LOGIN_SERVER/${img#library/}" && docker push -q "$LOGIN_SERVER/${img#library/}" >/dev/null
+  }
 done
 ACR_SERVER="$(az acr show -n "$ACR" --query loginServer -o tsv)"
-ACR_PASS="$(az acr credential show -n "$ACR" --query 'passwords[0].value' -o tsv)"
+ACR_PASS=""
+[ -z "${ID_RES:-}" ] && ACR_PASS="$(az acr credential show -n "$ACR" --query 'passwords[0].value' -o tsv)"
 
 say "3/6 PostgreSQL $PG"
-if ! az postgres flexible-server show -g "$RG" -n "$PG" -o none 2>/dev/null; then
+# Databases and firewall rules through the Azure REST API: the az postgres
+# sub-command flags differ between CLI versions, the REST paths do not.
+pg_api() { # pg_api METHOD sub-path [az rest args...]
+  local m="$1" sub="$2"; shift 2
+  local id; id="$(az postgres flexible-server show -g "$RG" -n "$PG" --query id -o tsv)"
+  az rest --method "$m" --url "https://management.azure.com${id}/${sub}?api-version=2022-12-01" "$@"
+}
+if az postgres flexible-server show -g "$RG" -n "$PG" -o none 2>/dev/null; then
+  # Existing (shared) server: use the login you were given; nothing is stored in the script.
+  PG_ADMIN="${DB_USER:-$(az postgres flexible-server show -g "$RG" -n "$PG" --query administratorLogin -o tsv)}"
+  [ -n "${DB_PASSWORD:-}" ] || { read -r -s -p "Password for $PG_ADMIN on $PG: " DB_PASSWORD; echo; }
+  PG_PASSWORD="$DB_PASSWORD"
+  if [ -z "$(pg_api GET firewallRules --query "value[?properties.startIpAddress=='0.0.0.0' && properties.endIpAddress=='0.0.0.0'].name" -o tsv 2>/dev/null)" ]; then
+    echo "warning: $PG has no 'allow Azure services' firewall rule; the app may not reach it. Ask the owner, or run:"
+    echo "  az postgres flexible-server firewall-rule create -g $RG --server-name $PG --name AllowAzureServices --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0"
+  fi
+else
+  newsecret PG_PASSWORD; . "$SECRETS_FILE"
   az postgres flexible-server create -g "$RG" -n "$PG" -l "$LOCATION" --version 16 \
     --tier Burstable --sku-name Standard_B1ms --storage-size 32 \
     --admin-user "$PG_ADMIN" --admin-password "$PG_PASSWORD" \
     --public-access 0.0.0.0 --yes -o none   # 0.0.0.0 = allow Azure services only
 fi
 for db in naledi_bap naledi_bpp; do
-  az postgres flexible-server db show -g "$RG" -s "$PG" -d "$db" -o none 2>/dev/null \
-    || az postgres flexible-server db create -g "$RG" -s "$PG" -d "$db" -o none
+  if pg_api GET "databases/$db" -o none 2>/dev/null; then echo "  database $db exists"
+  else
+    pg_api PUT "databases/$db" --body '{"properties":{"charset":"UTF8","collation":"en_US.utf8"}}' -o none
+    for i in $(seq 1 30); do pg_api GET "databases/$db" -o none 2>/dev/null && break; sleep 5; done
+    pg_api GET "databases/$db" -o none 2>/dev/null || { echo "database $db was not created"; exit 1; }
+    echo "  created database $db"
+  fi
 done
 PG_HOST="$(az postgres flexible-server show -g "$RG" -n "$PG" --query fullyQualifiedDomainName -o tsv)"
-BAP_DB="postgres://$PG_ADMIN:$PG_PASSWORD@$PG_HOST:5432/naledi_bap?sslmode=require"
-BPP_DB="postgres://$PG_ADMIN:$PG_PASSWORD@$PG_HOST:5432/naledi_bpp?sslmode=require"
+BAP_DB="postgres://$(urlenc "$PG_ADMIN"):$(urlenc "$PG_PASSWORD")@$PG_HOST:5432/naledi_bap?sslmode=require"
+BPP_DB="postgres://$(urlenc "$PG_ADMIN"):$(urlenc "$PG_PASSWORD")@$PG_HOST:5432/naledi_bpp?sslmode=require"
 
 say "4/6 Config share $SA/$SHARE"
 az storage account show -g "$RG" -n "$SA" -o none 2>/dev/null \
@@ -112,7 +172,7 @@ if grep -rqE '\b(onix-bap|onix-bpp|sandbox-bap|sandbox-bpp|naledi-edge)\b' "$STA
   echo "note: these lines still name a Docker host (check them):"
   grep -rnE '\b(onix-bap|onix-bpp|sandbox-bap|sandbox-bpp|naledi-edge)\b' "$STAGE" --include='*.yaml' --include=Caddyfile | sed 's#^#  #'
 fi
-az storage file upload-batch --account-name "$SA" --account-key "$SA_KEY" -d "$SHARE" -s "$STAGE" --overwrite -o none
+az storage file upload-batch --account-name "$SA" --account-key "$SA_KEY" -d "$SHARE" -s "$STAGE" -o none
 az containerapp env storage set -g "$RG" -n "$ENV_NAME" --storage-name naledi-config \
   --azure-file-account-name "$SA" --azure-file-account-key "$SA_KEY" \
   --azure-file-share-name "$SHARE" --access-mode ReadOnly -o none
@@ -125,8 +185,25 @@ OPT_BAP=""; OPT_BPP=""
 [ -n "${MATCH_URL:-}" ] && OPT_BPP+="          - { name: MATCH_URL, value: \"$MATCH_URL\" }"$'\n'
 [ -n "${EVENTS_URL:-}" ] && OPT_BPP+="          - { name: EVENTS_URL, value: \"$EVENTS_URL\" }"$'\n' \
                          && OPT_BAP+="          - { name: EVENTS_URL, value: \"$EVENTS_URL\" }"$'\n'
+# Registry access: managed identity for a shared registry, else the admin user.
+if [ -n "${ID_RES:-}" ]; then
+  ID_BLOCK="identity:
+  type: UserAssigned
+  userAssignedIdentities:
+    $ID_RES: {}"
+  REG_BLOCK="      - server: $ACR_SERVER
+        identity: $ID_RES"
+  ACR_SECRET=""
+else
+  ID_BLOCK=""
+  REG_BLOCK="      - server: $ACR_SERVER
+        username: $ACR
+        passwordSecretRef: acr-password"
+  ACR_SECRET="      - { name: acr-password, value: \"$ACR_PASS\" }"
+fi
 cat > "$YAML" <<Y
 location: $LOCATION
+$ID_BLOCK
 properties:
   managedEnvironmentId: $ENV_ID
   configuration:
@@ -137,11 +214,9 @@ properties:
       transport: auto
       allowInsecure: false
     registries:
-      - server: $ACR_SERVER
-        username: $ACR
-        passwordSecretRef: acr-password
+$REG_BLOCK
     secrets:
-      - { name: acr-password, value: "$ACR_PASS" }
+$ACR_SECRET
       - { name: api-key, value: "$API_KEY" }
       - { name: internal-key, value: "$INTERNAL_KEY" }
       - { name: bap-db, value: "$BAP_DB" }
