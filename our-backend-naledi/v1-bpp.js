@@ -372,6 +372,26 @@ module.exports = function createV1Bpp(k) {
     if (need.history.length > 100) need.history.splice(0, need.history.length - 100);
   }
 
+  // A practitioner may ask for the same need type again once the previous
+  // round is done. The need's identity (practitionerId:needType) stays the
+  // same, so its full history keeps every past round for the shared view --
+  // only who is currently handling it is cleared, for a fresh round to start.
+  // Declined and withdrawn needs already reopen elsewhere; this is the one
+  // state (select's own status check) that had no way back.
+  function reopenIfFulfilled(needId) {
+    const need = k.needs.get(needId);
+    if (!need || need.status !== 'fulfilled') return need;
+    track(need, 'reopened', {});
+    need.status = 'open';
+    need.providerId = null;
+    need.coachId = null;
+    need.transactionId = null;
+    need.completedAt = null;
+    log.info('need.reopened', { needId, practitionerId: need.naledisId, needType: need.type });
+    persist();
+    return need;
+  }
+
   function onQueued(pending) {
     const need = k.needs.get(pending.needId) || {};
     const txId = pending.context && pending.context.transactionId;
@@ -698,5 +718,5 @@ module.exports = function createV1Bpp(k) {
     persist();
   }
 
-  return { handle, handleDiscover, ensureNeed, onQueued, onNeedStatus, onWithdrawn, persist, restore, delegated: !!MATCH_URL, ready: store.ready, flush: store.flush };
+  return { handle, handleDiscover, ensureNeed, reopenIfFulfilled, onQueued, onNeedStatus, onWithdrawn, persist, restore, delegated: !!MATCH_URL, ready: store.ready, flush: store.flush };
 };

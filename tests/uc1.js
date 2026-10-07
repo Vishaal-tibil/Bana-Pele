@@ -142,6 +142,22 @@ const server = http.createServer((req, res) => {
   r = await api('GET', `/v1/transactions?practitionerId=${P}`);
   check('Naledi side also returns the title', r.body[0] && r.body[0].title === 'Register my ECD', r.body[0]);
 
+  section('7a. Ask again after fulfilled');
+  const s2 = await api('POST', '/v1/search', { practitionerId: P, needType: 'registration', region: 'Alexandra', title: 'Register again' });
+  check('a second search for the same type is accepted', s2.status === 202, s2);
+  await waitFor(async () => (await api('GET', `/v1/status/${s2.body.transactionId}`)).body.status === 'results_ready');
+  r = await api('POST', '/v1/select', { transactionId: s2.body.transactionId, practitionerId: P, needType: 'registration', providerId: 'provider-wehelp' });
+  check('select on the same need type succeeds once the prior round is fulfilled', r.status === 202, r);
+  await waitFor(async () => {
+    const x = await api('GET', `/v1/commitments?practitionerId=${P}`);
+    return (x.body.commitments || []).some((n) => n.needType === 'registration' && n.awaitingDecision && n.awaitingDecision.transactionId === s2.body.transactionId);
+  });
+  c = (await api('GET', `/v1/commitments?practitionerId=${P}`)).body.commitments.find((n) => n.needType === 'registration');
+  check('the need is open again for the new round, not stuck on fulfilled', c && c.status !== 'fulfilled', c && c.status);
+  check('the new round still has only one commitment for this need type (same id, not a duplicate)', (await api('GET', `/v1/commitments?practitionerId=${P}`)).body.commitments.filter((n) => n.needType === 'registration').length === 1);
+  check('the prior round stays in history, with a reopened event marking the new one', c && c.history.some((h) => h.event === 'fulfilled') && c.history.some((h) => h.event === 'reopened'), c && c.history);
+  check('the original transaction still reads as fulfilled -- history is not rewritten', (await api('GET', `/v1/status/${tx}`)).body.status === 'fulfilled', (await api('GET', `/v1/status/${tx}`)).body);
+
   section('7b. Decline, then withdraw');
   const P2 = P + '_d';
   const ask = async (who) => {
