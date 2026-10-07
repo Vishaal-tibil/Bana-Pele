@@ -278,7 +278,15 @@ $OPT_BAP        resources: { cpu: 0.25, memory: 0.5Gi }
         resources: { cpu: 0.25, memory: 0.5Gi }
 Y
 if az containerapp show -g "$RG" -n "$APP" -o none 2>/dev/null; then
-  az containerapp update -g "$RG" -n "$APP" --yaml "$YAML" -o none
+  # An existing app must hold the identity before its registry can use it:
+  # "update --yaml" does not attach identities itself.
+  if [ -n "${ID_RES:-}" ]; then
+    az containerapp identity assign -g "$RG" -n "$APP" --user-assigned "$ID_RES" -o none
+    az containerapp registry set -g "$RG" -n "$APP" --server "$ACR_SERVER" --identity "$ID_RES" -o none
+  fi
+  # The identity is attached above; leave it out of the update itself.
+  awk '/^identity:/{skip=1; next} /^properties:/{skip=0} !skip' "$YAML" > "$YAML.update"
+  az containerapp update -g "$RG" -n "$APP" --yaml "$YAML.update" -o none
 else
   az containerapp create -g "$RG" -n "$APP" --yaml "$YAML" -o none
 fi
