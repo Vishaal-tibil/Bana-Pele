@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# try-all-apis.sh -- calls every /v1 API in flow order and shows the answers.
+# try-all-apis.sh -- calls every /v1 API in flow order and shows the answers
+# (the flow, lists, shared view, withdraw and subscriptions: 22 checks).
 #
 #   bash try-all-apis.sh
 #
@@ -81,6 +82,39 @@ call GET "/v1/status/$TX"; show "Tracking: GET /v1/status/{id} (should say fulfi
 call GET "/v1/log/$TX"
 n=$(printf '%s' "$BODY" | grep -o '"event":' | wc -l)
 show "Tracking: GET /v1/log/{id} ($n log entries)" 200 "$CODE" "$(printf '%s' "$BODY" | head -c 300)..."
+
+# Lists and the shared view
+call GET "/v1/transactions?practitionerId=$P"
+show "Lists: GET /v1/transactions?practitionerId= (Naledi's requests)" 200 "$CODE" "$(printf '%s' "$BODY" | head -c 200)..."
+printf '%s' "$BODY" | grep -q "$TX" && { OK=$((OK+1)); echo "[PASS] the request is in Naledi's list"; } || { BAD=$((BAD+1)); echo "[FAIL] the request is missing from Naledi's list"; }
+call GET "/v1/commitments?practitionerId=$P"
+show "Shared view: GET /v1/commitments?practitionerId=" 200 "$CODE" "$(printf '%s' "$BODY" | head -c 300)..."
+printf '%s' "$BODY" | grep -q '"status":"fulfilled"' && printf '%s' "$BODY" | grep -q '"event":"fulfilled"' \
+  && { OK=$((OK+1)); echo "[PASS] commitment is fulfilled, with its history"; } \
+  || { BAD=$((BAD+1)); echo "[FAIL] commitment not fulfilled or history missing"; }
+
+# Withdraw: a delivered request cannot be withdrawn; a waiting one can (Beckn cancel)
+call POST /v1/withdraw "{\"transactionId\":\"$TX\"}"
+show "Withdraw: POST /v1/withdraw on a delivered request is refused" 409 "$CODE" "$BODY"
+P2="${P}_w"
+call POST /v1/search "{\"practitionerId\":\"$P2\",\"needType\":\"registration\",\"region\":\"Alexandra\",\"title\":\"Withdraw check\"}"
+TX2=$(field transactionId)
+wait_status "$TX2" results_ready
+call POST /v1/select "{\"transactionId\":\"$TX2\",\"practitionerId\":\"$P2\",\"needType\":\"registration\",\"providerId\":\"$PROVIDER\"}"
+wait_status "$TX2" pending
+call POST /v1/withdraw "{\"transactionId\":\"$TX2\",\"reason\":\"no longer needed\"}"
+show "Withdraw: POST /v1/withdraw while the provider decides" 202 "$CODE" "$BODY"
+wait_status "$TX2" withdrawn && { OK=$((OK+1)); echo "[PASS] request is withdrawn (cancel / on_cancel went through)"; } \
+  || { BAD=$((BAD+1)); echo "[FAIL] request did not become withdrawn"; }
+
+# NGO subscriptions (registered and removed again; the address is never called)
+call POST /v1/subscriptions "{\"name\":\"api check\",\"url\":\"https://example.invalid/hook\",\"providerIds\":[\"nobody\"]}"
+SUB=$(field id)
+show "Subscriptions: POST /v1/subscriptions" 201 "$CODE" "$(printf '%s' "$BODY" | sed 's/"secret":"[^"]*"/"secret":"(hidden)"/')"
+call GET /v1/subscriptions
+show "Subscriptions: GET /v1/subscriptions" 200 "$CODE" "(list)"
+call DELETE "/v1/subscriptions/$SUB"
+show "Subscriptions: DELETE /v1/subscriptions/{id}" 200 "$CODE" "$BODY"
 
 echo
 echo "=============================="
