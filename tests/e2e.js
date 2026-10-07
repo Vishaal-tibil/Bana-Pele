@@ -237,7 +237,12 @@ async function waitHealthy(timeout = 45000) {
   check('confirming again is idempotent (200)', r.status === 200 && r.body.idempotent === true, r);
   const a4 = await searchReady(A);
   await select(a4.tx, A);
-  check('a fulfilled need cannot be requested again', (await waitStatus(a4.tx, 'rejected')) === 'rejected');
+  check('after fulfilment the same need can be requested again (a new round)', (await waitStatus(a4.tx, 'pending')) === 'pending');
+  await new Promise((res) => setTimeout(res, 500));
+  const n2 = await needOf(`${A}:registration`);
+  check('the need is open again and nobody holds it yet', n2.status === 'open' && !n2.providerId, n2);
+  r = await api('POST', '/v1/provider/decision', { transactionId: a4.tx, decision: 'decline' });
+  check('the new round can be answered (declined here)', r.status === 200 && r.body.needStatus === 'open', r);
 
   // ------------------------------------------------------------------
   section('11. Decline, then retry');
@@ -384,10 +389,11 @@ async function waitHealthy(timeout = 45000) {
   const both = `${bapLog}\n${bppLog}`;
   const errLines = both.split('\n').filter((l) => l.includes('"level":"error"'));
   check('no error-level lines in either adapter', errLines.length === 0, errLines.slice(0, 2));
-  // Real failures only: the adapters also log "... validation passed" at debug level.
+  // Real failures only: the adapters also log "... validation passed" at debug level,
+  // and a "Spec validation warnings (non-fatal)" line about the schema file itself when they start.
   const schemaProblems = both
     .split('\n')
-    .filter((l) => !/passed/i.test(l) && /is unsupported|validation (failed|error)|"NACK"|invalid signature|signature (validation )?failed|schema.{0,40}(failed|invalid)/i.test(l));
+    .filter((l) => !/passed/i.test(l) && !/non-fatal/i.test(l) && /is unsupported|validation (failed|error)|"NACK"|invalid signature|signature (validation )?failed|schema.{0,40}(failed|invalid)/i.test(l));
   check('no schema rejections, NACKs or validation failures', schemaProblems.length === 0, schemaProblems.slice(0, 2).map((l) => l.slice(0, 200)));
   const hosts = new Set([...both.matchAll(/Forwarding request to URL: (https?:\/\/[^/"\s]+)/g)].map((m) => m[1]));
   const allowed = new Set(['http://onix-bpp:8082', 'http://onix-bap:8081', 'http://sandbox-bap:3001', 'http://sandbox-bpp:3002']);
