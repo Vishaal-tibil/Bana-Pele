@@ -172,7 +172,7 @@ if grep -rqE '\b(onix-bap|onix-bpp|sandbox-bap|sandbox-bpp|naledi-edge)\b' "$STA
   echo "note: these lines still name a Docker host (check them):"
   grep -rnE '\b(onix-bap|onix-bpp|sandbox-bap|sandbox-bpp|naledi-edge)\b' "$STAGE" --include='*.yaml' --include=Caddyfile | sed 's#^#  #'
 fi
-az storage file upload-batch --account-name "$SA" --account-key "$SA_KEY" -d "$SHARE" -s "$STAGE" --overwrite -o none
+az storage file upload-batch --account-name "$SA" --account-key "$SA_KEY" -d "$SHARE" -s "$STAGE" -o none
 az containerapp env storage set -g "$RG" -n "$ENV_NAME" --storage-name naledi-config \
   --azure-file-account-name "$SA" --azure-file-account-key "$SA_KEY" \
   --azure-file-share-name "$SHARE" --access-mode ReadOnly -o none
