@@ -14,6 +14,7 @@
 //   POST /v1/provider/offer      -> provider side (offer to the practitioner)
 //   POST /v1/provider/decision   -> provider side (accept / decline + coach)
 //   POST /v1/provider/complete   -> provider side (mark support delivered)
+//   POST /v1/provider/register   -> provider side (add a new NGO/Thabo to the directory)
 //   GET  /v1/commitments         who holds which need (per-Naledi shared view, UC1)
 //   GET|POST /v1/subscriptions   NGO webhooks: new matches, requests, status changes (UC1)
 //   DELETE /v1/subscriptions/{id}
@@ -204,7 +205,7 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
     }
 
     // ---- provider-side calls are relayed to the provider app on the internal network ----
-    const providerMatch = path.match(/^\/v1\/provider\/(offer|decision|complete)$/);
+    const providerMatch = path.match(/^\/v1\/provider\/(offer|decision|complete|register)$/);
     if (providerMatch) {
       if (req.method !== 'POST') return send(res, 405, { error: 'method_not_allowed' });
       const body = await readJson(req);

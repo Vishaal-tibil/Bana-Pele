@@ -15,6 +15,7 @@
 //
 // Internal endpoints (header x-internal-key):
 //   POST /internal/offer      POST /internal/decision   POST /internal/complete
+//   POST /internal/register   add a new provider to the directory (relayed from /v1/provider/register)
 //   POST /internal/reset      GET  /internal/state      GET /internal/log/{tx}
 //   GET  /internal/commitments             who holds which need (shared view, UC1)
 //   GET|POST /internal/subscriptions       NGO webhooks for new matches / requests
@@ -673,6 +674,37 @@ module.exports = function createV1Bpp(k) {
       persist();
       log.info('offer.sent', { transactionId: b.transactionId, offerId, providerId: b.providerId, title: b.title });
       return send(res, 200, { offerId, status: 'sent' });
+    }
+
+    if (path === '/internal/register') {
+      if (!b.name || typeof b.name !== 'string') {
+        return send(res, 400, { error: 'invalid_request', message: 'name is required' });
+      }
+      if (!Array.isArray(b.needTypesCovered) || b.needTypesCovered.length === 0) {
+        return send(res, 400, { error: 'invalid_request', message: 'needTypesCovered must be a non-empty list' });
+      }
+      const bad = b.needTypesCovered.filter((t) => !k.NEED_TYPES.includes(t));
+      if (bad.length) {
+        return send(res, 400, { error: 'invalid_request', message: `unknown needType(s): ${bad.join(', ')}`, needTypes: k.NEED_TYPES });
+      }
+      if (!b.region || typeof b.region !== 'string') {
+        return send(res, 400, { error: 'invalid_request', message: 'region is required' });
+      }
+      const providerId = `provider-${uuid().slice(0, 8)}`;
+      const provider = {
+        id: providerId,
+        name: b.name,
+        kind: b.kind || 'NGO',
+        needTypesCovered: [...new Set(b.needTypesCovered)],
+        region: b.region,
+        coverage: Array.isArray(b.coverage) ? b.coverage : [],
+        capacity: b.capacity || 'Open',
+        description: typeof b.description === 'string' ? b.description : '',
+      };
+      k.providers.set(providerId, provider);
+      log.info('provider.registered', { providerId, name: provider.name, needTypesCovered: provider.needTypesCovered, region: provider.region });
+      persist();
+      return send(res, 201, provider);
     }
 
     return send(res, 404, { error: 'not_found' });

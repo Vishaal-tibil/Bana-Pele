@@ -71,6 +71,24 @@ const server = http.createServer((req, res) => {
   r = await api('POST', '/v1/subscriptions', { url: 'http://x', events: ['bogus'] });
   check('subscribe with an unknown event -> 400', r.status === 400, r);
 
+  section('1b. Provider registration');
+  r = await api('POST', '/v1/provider/register', { name: 'Test NGO', needTypesCovered: ['nutrition'], region: 'UC1-Test-Region' }, null);
+  check('register without a key -> 401', r.status === 401, r.status);
+  r = await api('POST', '/v1/provider/register', { needTypesCovered: ['nutrition'], region: 'UC1-Test-Region' });
+  check('register without a name -> 400', r.status === 400, r);
+  r = await api('POST', '/v1/provider/register', { name: 'Test NGO', needTypesCovered: ['not-a-real-type'], region: 'UC1-Test-Region' });
+  check('register with an unknown needType -> 400', r.status === 400, r);
+  r = await api('POST', '/v1/provider/register', { name: 'Test NGO', needTypesCovered: ['nutrition'], region: 'UC1-Test-Region', description: 'Added by the UC1 suite' });
+  const newProvider = r.body;
+  check('register accepted (201), with a generated id', r.status === 201 && typeof newProvider.id === 'string' && newProvider.id.startsWith('provider-'), r);
+  r = await api('POST', '/v1/search', { practitionerId: `${P}_reg`, needType: 'nutrition', region: 'UC1-Test-Region' });
+  const regTx = r.body.transactionId;
+  const results = await waitFor(async () => {
+    const x = await api('GET', `/v1/results/${regTx}`);
+    return x.body.results.some((p) => p.providerId === newProvider.id) ? x.body : null;
+  });
+  check('the new provider is matchable immediately, no extra step', !!results, results);
+
   section('2. Two NGOs subscribe');
   r = await api('POST', '/v1/subscriptions', {
     name: 'WeHelp portal', url: `${SUB_HOST}:${PORT}/wehelp`, secret: keys.wehelp,
