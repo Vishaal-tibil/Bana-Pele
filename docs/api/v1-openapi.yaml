@@ -346,6 +346,65 @@ paths:
         '404': { $ref: '#/components/responses/NoPendingRequest' }
         '502': { $ref: '#/components/responses/NetworkOrProviderSideError' }
 
+  /v1/provider/register:
+    post:
+      tags: ["7. Complete"]
+      operationId: registerProvider
+      summary: Add a new provider to the directory
+      description: |
+        Adds a new NGO or Thabo to the provider directory. It can be matched
+        and searched against immediately -- no separate step needed. Each
+        `needType` must be one of the values listed above.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, needTypesCovered, region]
+              properties:
+                name: { type: string }
+                kind: { type: string, default: NGO, example: NGO }
+                needTypesCovered: { type: array, items: { type: string }, minItems: 1 }
+                region: { type: string }
+                coverage: { type: array, items: { type: string }, description: "Other region names this provider also serves, for an exact-match lookup." }
+                capacity: { type: string, default: Open }
+                description: { type: string }
+            example:
+              name: Impande
+              kind: NGO
+              needTypesCovered: [registration]
+              region: Gauteng
+              description: Registration and municipal-compliance assistance.
+      responses:
+        '201':
+          description: Provider created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+                  kind: { type: string }
+                  needTypesCovered: { type: array, items: { type: string } }
+                  region: { type: string }
+                  coverage: { type: array, items: { type: string } }
+                  capacity: { type: string }
+                  description: { type: string }
+              example:
+                id: provider-a1b2c3d4
+                name: Impande
+                kind: NGO
+                needTypesCovered: [registration]
+                region: Gauteng
+                coverage: []
+                capacity: Open
+                description: Registration and municipal-compliance assistance.
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '502': { $ref: '#/components/responses/NetworkOrProviderSideError' }
+
   /v1/status/{transactionId}:
     get:
       tags: ["Tracking"]
