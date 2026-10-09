@@ -430,6 +430,41 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/UnknownTransaction' }
 
+  /v1/status/{transactionId}/refresh:
+    post:
+      tags: ["Tracking"]
+      operationId: refreshStatus
+      summary: Ask the provider side where the request stands
+      description: |
+        Sends a Beckn `status` to the provider side. Its answer (`on_status`)
+        corrects this side if an earlier callback was missed, for example
+        while the network was restarting. Read the result with
+        `GET /v1/status/{transactionId}`; a correction also sends a
+        `status.changed` event with `payload.via: "status"`.
+
+        Only moves the answer proves are applied (pending -> reserved or
+        rejected, confirming -> fulfilled, withdrawing -> withdrawn). A request
+        that is already right is left as it is.
+
+        You rarely need this: the network checks requests that are waiting on
+        the provider side (pending, confirming, withdrawing) by itself, after a
+        restart and then at most every 30 minutes.
+      parameters: [ { $ref: '#/components/parameters/TransactionId' } ]
+      responses:
+        '202':
+          description: Check sent
+          content:
+            application/json:
+              example: { transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0, status: pending, checking: true }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/UnknownTransaction' }
+        '409':
+          description: Nothing to check yet (no provider has been asked)
+          content:
+            application/json:
+              example: { error: nothing_to_check, status: results_ready, message: no provider has been asked yet }
+        '502': { $ref: '#/components/responses/NetworkRejected' }
+
   /v1/log/{transactionId}:
     get:
       tags: ["Tracking"]

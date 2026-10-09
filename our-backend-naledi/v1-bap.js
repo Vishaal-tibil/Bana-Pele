@@ -10,6 +10,7 @@
 //   POST /v1/select              request a provider (sends select + init)
 //   POST /v1/confirm             confirm once reserved
 //   GET  /v1/status/{tx}         current status of the whole transaction
+//   POST /v1/status/{tx}/refresh ask the provider side again (Beckn status / on_status)
 //   GET  /v1/log/{tx}            the transaction's full log, both sides (from the database)
 //   POST /v1/provider/offer      -> provider side (offer to the practitioner)
 //   POST /v1/provider/decision   -> provider side (accept / decline + coach)
@@ -129,6 +130,59 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
       providerId: extra.providerId || tx.order.providerId || null,
       status: extra.status || null,
       payload: extra.payload || {},
+    });
+  }
+
+  // ---- Beckn status: catching up on missed callbacks ----
+  // A request still waiting on the provider side (pending, confirming,
+  // withdrawing) is checked automatically: on the first sweep after a
+  // restart, then at most once per STATUS_RECHECK_MS. STATUS_SWEEP_MS=0 turns
+  // the sweep off; POST /v1/status/{tx}/refresh still works.
+  const STATUS_SWEEP_MS = Number(process.env.STATUS_SWEEP_MS ?? 300000);
+  const STATUS_RECHECK_MS = Number(process.env.STATUS_RECHECK_MS ?? 1800000);
+  const WAITING = ['pending', 'confirming', 'withdrawing'];
+  const lastChecked = new Map(); // transactionId -> ms; in memory, so a restart checks everything once
+  const selectedAt = new Map(); // transactionId -> ms of the last select (in memory)
+  const SELECT_GRACE_MS = Number(process.env.STATUS_SELECT_GRACE_MS ?? 30000);
+
+  function checkStatus(tx, why) {
+    lastChecked.set(tx.transactionId, Date.now());
+    note(tx, 'status check sent', { why, orderStatus: tx.order.status });
+    return trigger('status', { needId: tx.order.needId, providerId: tx.order.providerId }, tx.transactionId);
+  }
+
+  async function sweep() {
+    const now = Date.now();
+    const due = Object.values(S.transactions).filter(
+      (tx) => WAITING.includes(tx.order.status) && tx.order.needId && tx.order.providerId &&
+        now - (lastChecked.get(tx.transactionId) || 0) >= STATUS_RECHECK_MS
+    );
+    for (const tx of due) {
+      const r = await checkStatus(tx, 'sweep');
+      if (!r.ok) log.warn('status.check_failed', { transactionId: tx.transactionId, detail: (r.text || r.error || '').slice(0, 300) });
+    }
+    if (due.length) log.info('status.sweep', { checked: due.length });
+  }
+
+  // on_status -> this side's order status. Only moves that the code proves
+  // are applied; anything else is left as it is.
+  function applyStatus(tx, code) {
+    const cur = tx.order.status;
+    if (code === 'COMPLETED' && !['fulfilled', 'withdrawn'].includes(cur)) return 'fulfilled';
+    if (code === 'CANCELLED' && [...WAITING, 'reserved'].includes(cur)) return 'withdrawn';
+    if (code === 'ACTIVE' && cur === 'pending') return 'reserved';
+    // REJECTED also means "nothing held for this transaction", which is briefly
+    // true while a fresh select is still on its way to the provider side.
+    if (code === 'REJECTED' && cur === 'pending' && Date.now() - (selectedAt.get(tx.transactionId) || 0) > SELECT_GRACE_MS) return 'rejected';
+    // Withdrawing a request the provider had already declined: nothing to withdraw.
+    if (code === 'REJECTED' && cur === 'withdrawing' && tx.order.withdrawnFrom === 'pending') return 'rejected';
+    return cur;
+  }
+
+  if (STATUS_SWEEP_MS > 0) {
+    ready.then(() => {
+      const t = setInterval(() => sweep().catch((e) => log.error('status.sweep_failed', { error: e.message })), STATUS_SWEEP_MS);
+      if (t.unref) t.unref();
     });
   }
 
@@ -315,6 +369,7 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
       }
       const needId = `${b.practitionerId}:${b.needType}`;
       tx.order = { status: 'pending', needId, providerId: b.providerId };
+      selectedAt.set(tx.transactionId, Date.now());
       note(tx, 'select requested', { needId, providerId: b.providerId });
       store.save();
       let r = await trigger('select', { needId, providerId: b.providerId }, tx.transactionId);
@@ -351,6 +406,25 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
         return send(res, 502, { transactionId: tx.transactionId, status: 'reserved', error: 'network_rejected', detail: (r.text || r.error || '').slice(0, 500) });
       }
       return send(res, 202, { transactionId: tx.transactionId, status: 'confirming' });
+    }
+
+    // Ask the provider side where the request stands (Beckn status). The
+    // answer (on_status) corrects this side if a callback was missed, for
+    // example while the app was restarting. Read the result with GET /v1/status.
+    const refresh = path.match(/^\/v1\/status\/([^/]+)\/refresh$/);
+    if (req.method === 'POST' && refresh) {
+      const txId = decodeURIComponent(refresh[1]);
+      res.txId = txId;
+      const tx = S.transactions[txId];
+      if (!tx) return send(res, 404, { error: 'unknown_transaction' });
+      if (!tx.order.needId || !tx.order.providerId) {
+        return send(res, 409, { error: 'nothing_to_check', status: summary(tx).status, message: 'no provider has been asked yet' });
+      }
+      const r = await checkStatus(tx, 'requested');
+      if (!r.ok) {
+        return send(res, 502, { transactionId: tx.transactionId, status: tx.order.status, error: 'network_rejected', detail: (r.text || r.error || '').slice(0, 500) });
+      }
+      return send(res, 202, { transactionId: tx.transactionId, status: tx.order.status, checking: true });
     }
 
     // Naledi no longer needs the help: withdraw the request (Beckn cancel).
@@ -454,6 +528,18 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
       }
       if (tx.order.status !== before || (action === 'on_confirm' && code === 'REJECTED')) {
         emit('status.changed', tx, { status: tx.order.status, payload: { needId: tx.order.needId, code, from: before } });
+      }
+    } else if (action === 'on_status') {
+      const contract = msg.contract || {};
+      const code = (((contract.commitments || [])[0] || {}).status || {}).code || (contract.status || {}).code;
+      const before = tx.order.status;
+      const after = applyStatus(tx, code);
+      note(tx, 'status checked', { code, from: before, to: after });
+      if (after !== before) {
+        tx.order.status = after;
+        if (before === 'withdrawing') delete tx.order.withdrawnFrom;
+        log.info('status.corrected', { transactionId: tx.transactionId, code, from: before, to: after });
+        emit('status.changed', tx, { status: after, payload: { needId: tx.order.needId, code, from: before, via: 'status' } });
       }
     } else if (action === 'on_cancel') {
       const contract = msg.contract || {};

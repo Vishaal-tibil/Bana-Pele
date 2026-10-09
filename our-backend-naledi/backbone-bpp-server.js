@@ -438,6 +438,33 @@ function handleAction(action, incoming) {
     return;
   }
 
+  if (action === 'status') {
+    // The practitioner side asks where this transaction's request stands
+    // (for example after missing a callback while it was restarting).
+    // Answer with on_status carrying the current code, as seen by THIS
+    // transaction:
+    //   DRAFT      still waiting for the provider to accept or decline
+    //   ACTIVE     reserved (also while a completion is waiting on the provider)
+    //   COMPLETED  support delivered
+    //   CANCELLED  withdrawn by the practitioner
+    //   REJECTED   declined, or nothing held for this transaction
+    const { needId, providerId } = extractFromContract(message);
+    const need = needs.get(needId);
+    const txId = context.transactionId;
+    const waiting = pendingRequests.find((p) => p.needId === needId && p.context && p.context.transactionId === txId);
+    let code = 'REJECTED';
+    if (waiting) code = waiting.action === 'confirm' ? 'ACTIVE' : 'DRAFT';
+    else if (need && need.transactionId === txId) {
+      code = { reserved: 'ACTIVE', fulfilled: 'COMPLETED', withdrawn: 'CANCELLED' }[need.status] || 'REJECTED';
+    }
+    log.info('status.answered', { transactionId: txId, needId, providerId, needStatus: need ? need.status : null, code });
+    sendCallback({
+      context: { ...context, action: 'on_status', timestamp: new Date().toISOString() },
+      message: { contract: buildContractResponse(needId, providerId, code) },
+    });
+    return;
+  }
+
   if (action === 'confirm') {
     const { needId, providerId } = extractFromContract(message);
     const need = needs.get(needId);
