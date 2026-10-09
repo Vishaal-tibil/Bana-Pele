@@ -102,7 +102,9 @@ function trigger(action, message, txId, opts = {}) {
       ],
     };
   }
-  const STATUS_FOR_ACTION = { select: 'DRAFT', init: 'ACTIVE', confirm: 'COMPLETED', cancel: 'CANCELLED' };
+  // status asks the provider side for the current state of the contract; the
+  // code it carries is not used by the receiver.
+  const STATUS_FOR_ACTION = { select: 'DRAFT', init: 'ACTIVE', confirm: 'COMPLETED', cancel: 'CANCELLED', status: 'ACTIVE' };
   let outgoingMessage;
   if (action === 'discover') {
     // practitionerId / tier / children are undefined for the built-in page and

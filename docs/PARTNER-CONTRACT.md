@@ -41,6 +41,7 @@ Editor or Postman).
 | `POST /v1/search` | Naledi signs up / asks for help | `{ practitionerId, needType, region, tier, children, title, description }` (`practitionerId` is your own user id, stored as given) | `202 { transactionId, status: "searching" }` |
 | `GET /v1/results/{transactionId}` | any time | none | providers found and offers received |
 | `GET /v1/status/{transactionId}` | any time | none | current status and details |
+| `POST /v1/status/{transactionId}/refresh` | a status looks stuck (rarely needed: the network checks waiting requests itself) | none | `202 { status, checking: true }`; read the result with `GET /v1/status`; `409 nothing_to_check` before a select |
 | `GET /v1/log/{transactionId}` | support / debugging | none | every message and state change on both sides, in time order |
 | `POST /v1/provider/offer` | WeHelp clicks Send Offer | `{ transactionId, providerId, title, area, note, offerId }` (send **your own** offer id) | `200 { offerId, status: "sent" }` |
 | `POST /v1/select` | Naledi accepts the offer | `{ transactionId, practitionerId, needType, providerId }` | `202 { status: "pending" }` |
@@ -65,6 +66,11 @@ it for every later call. An offer needs a search where WeHelp matched.
 `searching`, `results_ready`, `pending` (waiting for WeHelp), `reserved`
 (WeHelp accepted), `confirming`, `fulfilled`, `rejected` (declined, or the need
 was already taken), `error` (the network refused the message).
+
+If a status update was missed (for example during a network restart), the
+network asks the provider side again by itself (Beckn `status` / `on_status`)
+and corrects the status; the correction also arrives as a `status.changed`
+event with `payload.via: "status"`.
 
 ### Errors
 
