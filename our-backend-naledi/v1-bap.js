@@ -77,8 +77,12 @@ function bapDb(pool, log) {
         transaction_id: tx.transactionId, practitioner_id: tx.practitionerId, need_type: tx.needType,
         region: tx.region || '', status: tx.status, order_status: tx.order.status, need_id: tx.order.needId,
         provider_id: tx.order.providerId, results: tx.results, offers: tx.offers, created_at: tx.createdAt,
-        request: tx.title || tx.description || tx.language || tx.deliveryMode || tx.urgency || tx.roles || tx.excludeThaboRefs
-          ? { title: tx.title || null, description: tx.description || null, language: tx.language || null, deliveryMode: tx.deliveryMode || null, urgency: tx.urgency || null, roles: tx.roles || null, excludeThaboRefs: tx.excludeThaboRefs || null, referrals: tx.referrals && tx.referrals.length ? tx.referrals : null }
+        request: tx.title || tx.description || tx.language || tx.deliveryMode || tx.urgency || tx.roles || tx.excludeThaboRefs || tx.kind
+          ? {
+            title: tx.title || null, description: tx.description || null, language: tx.language || null, deliveryMode: tx.deliveryMode || null, urgency: tx.urgency || null,
+            roles: tx.roles || null, excludeThaboRefs: tx.excludeThaboRefs || null, referrals: tx.referrals && tx.referrals.length ? tx.referrals : null,
+            ...(tx.kind ? { kind: tx.kind, learning: tx.learning || null, enrolments: tx.enrolments || [] } : {}),
+          }
           : tx.referrals && tx.referrals.length ? { referrals: tx.referrals } : null,
       })),
       outbox: ob.toRows(S.outbox),
@@ -96,6 +100,7 @@ function bapDb(pool, log) {
             title: r.request.title || undefined, description: r.request.description || undefined, language: r.request.language || undefined,
             deliveryMode: r.request.deliveryMode || undefined, urgency: r.request.urgency || undefined, roles: r.request.roles || undefined,
             excludeThaboRefs: r.request.excludeThaboRefs || undefined, referrals: r.request.referrals || undefined,
+            ...(r.request.kind ? { kind: r.request.kind, learning: r.request.learning || undefined, enrolments: r.request.enrolments || [] } : {}),
           } : {}),
           order: { status: r.order_status, needId: r.need_id, providerId: r.provider_id },
           history: [], // the full history lives in tx_log
@@ -214,12 +219,35 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
       urgency: tx.urgency || null,
       roles: tx.roles || null,
       referralsCount: (tx.referrals || []).length,
+      ...(tx.kind === 'learning' ? { kind: 'learning', learning: tx.learning, enrolments: tx.enrolments || [] } : {}),
       status: tx.order.status !== 'none' ? tx.order.status : tx.status,
       order: tx.order,
       resultsCount: tx.results.length,
       offersCount: tx.offers.length,
       createdAt: tx.createdAt,
     };
+  }
+
+  // ---- UC3: enrolment answers from the learning provider ----
+  const NEED_TYPE_LEARNING = 'learning-skilling';
+  function learningCallback(tx, action, msg) {
+    const contract = msg.contract || {};
+    const commitment = (contract.commitments || [])[0] || {};
+    const resourceId = ((commitment.resources || [])[0] || {}).id || '';
+    const code = (commitment.status || {}).code;
+    const en = (tx.enrolments || []).find((e) => `enrol:${e.offeringId}` === resourceId);
+    if (!en) return note(tx, `ignored ${action}: not one of this search's enrolments`, { resourceId });
+    const from = en.status;
+    let to = from;
+    if (action === 'on_confirm') to = code === 'REJECTED' ? 'rejected' : from;
+    else if (action === 'on_status') to = { ACTIVE: 'enrolled', REJECTED: from === 'requested' ? 'declined' : from, CANCELLED: 'withdrawn' }[code] || from;
+    else if (action === 'on_cancel') to = code === 'CANCELLED' ? 'withdrawn' : from === 'withdrawing' ? en.withdrawnFrom || 'requested' : from;
+    if (to === from) return note(tx, `${action}: enrolment ${en.offeringId} stays ${from}`, { code });
+    en.status = to;
+    en.updatedAt = nowIso();
+    if (from === 'withdrawing') delete en.withdrawnFrom;
+    note(tx, `enrolment ${en.offeringId}: ${from} -> ${to}`, { code });
+    emit('enrolment.changed', tx, { providerId: en.providerId, status: to, payload: { offeringId: en.offeringId, title: en.title, from, code } });
   }
 
   // ---- request handling ----
@@ -259,6 +287,10 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
     const relayPath =
       (req.method === 'GET' && path === '/v1/commitments') ||
       (['GET', 'POST'].includes(req.method) && path === '/v1/progress') ||
+      (['GET', 'POST'].includes(req.method) && ['/v1/learning/offerings', '/v1/identity/links'].includes(path)) ||
+      (req.method === 'DELETE' && /^\/v1\/learning\/offerings\/[^/]+$/.test(path)) ||
+      (req.method === 'GET' && ['/v1/learning/enrolments', '/v1/capabilities'].includes(path)) ||
+      (req.method === 'POST' && path === '/v1/learning/enrolment-decision') ||
       (['GET', 'POST'].includes(req.method) && path === '/v1/subscriptions') ||
       (req.method === 'DELETE' && /^\/v1\/subscriptions\/[^/]+$/.test(path));
     if (relayPath) {
@@ -302,6 +334,89 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
       let parsed;
       try { parsed = JSON.parse(text); } catch (e) { parsed = { raw: text }; }
       return send(res, r.status, parsed);
+    }
+
+    // ---- UC3: learning search, enrolment, withdrawal (Beckn discover / confirm / cancel) ----
+    if (req.method === 'POST' && path === '/v1/learning/search') {
+      const b = await readJson(req);
+      if (!b.practitionerId || !b.capability) return send(res, 400, { error: 'invalid_request', message: 'practitionerId and capability are required' });
+      if (typeof b.capability !== 'string' || !ROLE_CODE.test(b.capability)) return send(res, 400, { error: 'invalid_request', message: 'capability must be a code like "nutrition_planning"' });
+      if (b.deliveryMode != null && !DELIVERY_MODES.includes(b.deliveryMode)) return send(res, 400, { error: 'invalid_request', message: `deliveryMode must be one of ${DELIVERY_MODES.join(', ')}` });
+      if (b.maxCost != null && !(Number.isFinite(Number(b.maxCost)) && Number(b.maxCost) >= 0)) return send(res, 400, { error: 'invalid_request', message: 'maxCost must be a number, 0 or more' });
+      if (b.digitalAccess != null && typeof b.digitalAccess !== 'boolean') return send(res, 400, { error: 'invalid_request', message: 'digitalAccess must be true or false' });
+      const learning = Object.fromEntries(Object.entries({
+        capability: b.capability, language: b.language ? String(b.language).slice(0, 20) : undefined, region: b.region ? String(b.region).slice(0, 100) : undefined,
+        deliveryMode: b.deliveryMode, maxCost: b.maxCost != null ? Number(b.maxCost) : undefined, digitalAccess: b.digitalAccess,
+      }).filter(([, v]) => v !== undefined));
+      const transactionId = uuid();
+      res.txId = transactionId;
+      const tx = {
+        transactionId, practitionerId: String(b.practitionerId), needType: NEED_TYPE_LEARNING, region: learning.region || '',
+        kind: 'learning', learning, enrolments: [], createdAt: nowIso(), status: 'searching', results: [], offers: [],
+        order: { status: 'none', needId: null, providerId: null }, history: [],
+      };
+      S.transactions[transactionId] = tx;
+      note(tx, 'learning search requested', learning);
+      store.save();
+      const r = await trigger('discover', { type: 'learning', practitionerId: tx.practitionerId, needType: NEED_TYPE_LEARNING, ...learning }, transactionId, { ttl: DISCOVER_TTL });
+      if (!r.ok) {
+        tx.status = 'error';
+        note(tx, 'network rejected the search', { detail: r.text || r.error });
+        store.save();
+        return send(res, 502, { transactionId, status: 'error', error: 'network_rejected', detail: (r.text || r.error || '').slice(0, 500) });
+      }
+      return send(res, 202, { transactionId, status: 'searching', epoch: S.epoch });
+    }
+
+    if (req.method === 'POST' && (path === '/v1/learning/enrol' || path === '/v1/learning/withdraw')) {
+      const b = await readJson(req);
+      res.txId = b.transactionId;
+      if (!b.transactionId || !b.offeringId) return send(res, 400, { error: 'invalid_request', message: 'transactionId and offeringId are required' });
+      const tx = S.transactions[b.transactionId];
+      if (!tx) return send(res, 404, { error: 'unknown_transaction' });
+      if (tx.kind !== 'learning') return send(res, 409, { error: 'not_a_learning_search', message: 'enrolment needs a transaction from POST /v1/learning/search' });
+      const offering = tx.results.find((o) => o.offeringId === String(b.offeringId));
+      if (!offering) return send(res, 404, { error: 'unknown_offering', message: 'this offering was not in the search results' });
+      tx.enrolments = tx.enrolments || [];
+      let en = tx.enrolments.find((e) => e.offeringId === offering.offeringId);
+      const needId = `enrol:${offering.offeringId}`;
+
+      if (path === '/v1/learning/enrol') {
+        if (en && ['requested', 'enrolled'].includes(en.status)) return send(res, 200, { transactionId: tx.transactionId, offeringId: en.offeringId, status: en.status, idempotent: true });
+        let sharedContext;
+        if (b.sharedContext != null) {
+          if (typeof b.sharedContext !== 'object' || Array.isArray(b.sharedContext)) return send(res, 400, { error: 'invalid_request', message: 'sharedContext must be an object' });
+          if (JSON.stringify(b.sharedContext).length > SHARED_CONTEXT_MAX) return send(res, 400, { error: 'invalid_request', message: `sharedContext is too large (max ${SHARED_CONTEXT_MAX} characters)` });
+          sharedContext = b.sharedContext;
+        }
+        if (!en) { en = { offeringId: offering.offeringId, providerId: offering.providerId, title: offering.title || null }; tx.enrolments.push(en); }
+        Object.assign(en, { status: 'requested', requestedAt: nowIso() });
+        note(tx, 'enrolment requested', { offeringId: en.offeringId, providerId: en.providerId, ...(sharedContext ? { sharedFields: Object.keys(sharedContext) } : {}) });
+        store.save();
+        const r = await trigger('confirm', { needId, providerId: offering.providerId, sharedContext }, tx.transactionId);
+        if (!r.ok) {
+          en.status = 'error';
+          note(tx, 'network rejected the enrolment', { detail: r.text || r.error });
+          store.save();
+          return send(res, 502, { transactionId: tx.transactionId, offeringId: en.offeringId, status: 'error', error: 'network_rejected', detail: (r.text || r.error || '').slice(0, 500) });
+        }
+        return send(res, 202, { transactionId: tx.transactionId, offeringId: en.offeringId, status: 'requested' });
+      }
+
+      if (!en || ['withdrawn', 'withdrawing'].includes(en.status)) return send(res, en ? 200 : 404, en ? { transactionId: tx.transactionId, offeringId: en.offeringId, status: en.status, idempotent: true } : { error: 'not_enrolled' });
+      if (!['requested', 'enrolled'].includes(en.status)) return send(res, 409, { error: 'nothing_to_withdraw', status: en.status });
+      en.withdrawnFrom = en.status;
+      en.status = 'withdrawing';
+      note(tx, 'enrolment withdrawal requested', { offeringId: en.offeringId });
+      store.save();
+      const r = await trigger('cancel', { needId, providerId: en.providerId }, tx.transactionId);
+      if (!r.ok) {
+        en.status = en.withdrawnFrom;
+        delete en.withdrawnFrom;
+        store.save();
+        return send(res, 502, { transactionId: tx.transactionId, offeringId: en.offeringId, status: en.status, error: 'network_rejected', detail: (r.text || r.error || '').slice(0, 500) });
+      }
+      return send(res, 202, { transactionId: tx.transactionId, offeringId: en.offeringId, status: 'withdrawing' });
     }
 
     if (req.method === 'POST' && path === '/v1/search') {
@@ -468,6 +583,15 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
       res.txId = txId;
       const tx = S.transactions[txId];
       if (!tx) return send(res, 404, { error: 'unknown_transaction' });
+      if (tx.kind === 'learning') {
+        const open = (tx.enrolments || []).filter((e) => ['requested', 'enrolled', 'withdrawing'].includes(e.status));
+        if (!open.length) return send(res, 409, { error: 'nothing_to_check', message: 'no enrolment has been requested yet' });
+        for (const e of open) {
+          note(tx, 'status check sent', { why: 'requested', offeringId: e.offeringId });
+          await trigger('status', { needId: `enrol:${e.offeringId}`, providerId: e.providerId }, tx.transactionId);
+        }
+        return send(res, 202, { transactionId: tx.transactionId, enrolments: tx.enrolments, checking: true });
+      }
       if (!tx.order.needId || !tx.order.providerId) {
         return send(res, 409, { error: 'nothing_to_check', status: summary(tx).status, message: 'no provider has been asked yet' });
       }
@@ -543,6 +667,11 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
     if (!tx) return false;
     const msg = incoming.message || {};
     note(tx, `received ${action}`);
+    if (tx.kind === 'learning' && action !== 'on_discover') {
+      learningCallback(tx, action, msg);
+      store.save();
+      return true;
+    }
 
     if (action === 'on_discover') {
       const resources = ((msg.catalogs || [])[0] || {}).resources || [];
@@ -553,7 +682,9 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
         } catch (e) {
           d = { name: r.descriptor && r.descriptor.name };
         }
-        if (d.type === 'referral') {
+        if (d.type === 'learning_offering') {
+          if (!tx.results.find((x) => x.offeringId === r.id)) tx.results.push({ ...d, offeringId: r.id });
+        } else if (d.type === 'referral') {
           // A Thabo redirected Naledi to another Thabo (UC2): the referred Thabo
           // joins her results, so she can select them on this same request.
           const to = d.referTo || {};
