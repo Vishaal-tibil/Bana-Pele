@@ -254,7 +254,18 @@ module.exports = function createV1Bpp(k) {
       return sub ? { url: sub.url, key: sub.secret } : null;
     },
   });
-  const SUB_EVENTS = ['practitioner.matched', 'request.received', 'status.changed'];
+  const SUB_EVENTS = ['practitioner.matched', 'request.received', 'status.changed', 'contribution.recorded', 'context.revoked'];
+
+  // UC2 step 9: what a Thabo records after helping. One list per need, newest last.
+  const CONTRIBUTION_TYPES = ['support_provided', 'agreed_action', 'milestone', 'status_update', 'follow_up', 'evidence', 'new_need'];
+  const MAX_CONTRIBUTIONS = 200;
+  const DATE = /^\d{4}-\d{2}-\d{2}(T[\d:.]+(Z|[+-]\d{2}:?\d{2})?)?$/;
+  // The next date someone has to act on: the earliest open follow-up or agreed action from today on.
+  function nextFollowUp(n) {
+    const today = nowIso().slice(0, 10);
+    return (n.contributions || []).filter((c) => ['follow_up', 'agreed_action'].includes(c.type) && c.dueDate && c.dueDate.slice(0, 10) >= today)
+      .map((c) => c.dueDate).sort()[0] || null;
+  }
 
   // ---- persistence of the legacy in-memory maps ----
 
@@ -372,6 +383,8 @@ module.exports = function createV1Bpp(k) {
         completedAt: n.completedAt || null,
         // Naledi's permitted context, for the provider she chose (UC2).
         sharedContext: n.sharedContext ? { providerId: n.sharedContext.providerId, sharedAt: n.sharedContext.sharedAt, context: n.sharedContext.context } : null,
+        contributions: n.contributions || [],
+        nextFollowUp: nextFollowUp(n),
         history: n.history || [],
         awaitingDecision: waiting ? { stage: waiting.action === 'confirm' ? 'confirm' : 'select_init', providerId: waiting.providerId, transactionId: waiting.context && waiting.context.transactionId } : null,
       };
@@ -758,6 +771,60 @@ module.exports = function createV1Bpp(k) {
       log.info('referral.sent', { transactionId: b.transactionId, referralId, fromProviderId: p.providerId, toProviderId: referTo.providerId, delivered: r.ok });
       if (!r.ok) return send(res, 502, { error: 'network_rejected', referralId, detail: (r.text || r.error || '').slice(0, 500) });
       return send(res, 200, { referralId, status: 'sent', declined: p.providerId, referTo });
+    }
+
+    // UC2 step 9: the Thabo holding a need records what happened.
+    if (path === '/internal/contribution') {
+      if (!b.transactionId) return send(res, 400, { error: 'invalid_request', message: 'transactionId is required' });
+      if (!CONTRIBUTION_TYPES.includes(b.type)) return send(res, 400, { error: 'invalid_request', message: `type must be one of ${CONTRIBUTION_TYPES.join(', ')}`, types: CONTRIBUTION_TYPES });
+      if (!b.summary || typeof b.summary !== 'string') return send(res, 400, { error: 'invalid_request', message: 'summary is required' });
+      if (b.dueDate != null && !(typeof b.dueDate === 'string' && DATE.test(b.dueDate))) return send(res, 400, { error: 'invalid_request', message: 'dueDate must be a date like 2026-10-20' });
+      if (b.type === 'follow_up' && !b.dueDate) return send(res, 400, { error: 'invalid_request', message: 'a follow_up needs a dueDate' });
+      if (b.type === 'new_need' && !k.NEED_TYPES.includes(b.newNeedType)) return send(res, 400, { error: 'invalid_request', message: 'a new_need needs newNeedType, one of the need types', needTypes: k.NEED_TYPES });
+      // Only the provider who holds the need on this transaction (accepted or done) can record.
+      const need = [...k.needs.values()].find((n) => n.transactionId === b.transactionId && n.providerId && ['reserved', 'fulfilled'].includes(n.status) && (!b.providerId || n.providerId === String(b.providerId)));
+      if (!need) return send(res, 409, { error: 'not_holding', message: 'contributions come from the provider who accepted this request' });
+      const c = {
+        id: `con-${uuid().slice(0, 8)}`,
+        at: nowIso(),
+        providerId: need.providerId,
+        coachId: need.coachId || null,
+        type: b.type,
+        summary: b.summary.slice(0, 500),
+        ...(typeof b.details === 'string' && b.details ? { details: b.details.slice(0, 2000) } : {}),
+        ...(b.dueDate ? { dueDate: b.dueDate } : {}),
+        ...(typeof b.evidenceRef === 'string' && b.evidenceRef ? { evidenceRef: b.evidenceRef.slice(0, 500) } : {}),
+        ...(b.type === 'new_need' ? { newNeedType: b.newNeedType } : {}),
+      };
+      need.contributions = [...(need.contributions || []), c].slice(-MAX_CONTRIBUTIONS);
+      need.updatedAt = c.at;
+      track(need, 'contribution', { providerId: c.providerId, transactionId: b.transactionId, contributionId: c.id, type: c.type });
+      log.info('contribution.recorded', { transactionId: b.transactionId, needId: need.id, providerId: c.providerId, contributionId: c.id, type: c.type });
+      emit('contribution.recorded', {
+        transactionId: b.transactionId,
+        practitionerId: need.naledisId,
+        providerId: c.providerId,
+        status: need.status,
+        payload: { needId: need.id, needType: need.type, contribution: c, nextFollowUp: nextFollowUp(need) },
+      });
+      persist();
+      return send(res, 201, { ...c, needId: need.id, nextFollowUp: nextFollowUp(need) });
+    }
+
+    // UC2 step 10: Naledi takes back the context she shared, even while the
+    // Thabo is still helping. The provider's app is told to drop its copy.
+    if (path === '/internal/revoke-context') {
+      if (!b.transactionId) return send(res, 400, { error: 'invalid_request', message: 'transactionId is required' });
+      const need = [...k.needs.values()].find((n) => n.sharedContext && (n.transactionId === b.transactionId || (n.request && n.request.transactionId === b.transactionId)));
+      if (!need) return send(res, 200, { transactionId: b.transactionId, revoked: false, message: 'nothing was shared on this request' });
+      const providerId = need.sharedContext.providerId;
+      delete need.sharedContext;
+      need.updatedAt = nowIso();
+      track(need, 'context_revoked', { providerId, transactionId: b.transactionId });
+      log.info('context.revoked', { transactionId: b.transactionId, needId: need.id, providerId });
+      emit('context.revoked', { transactionId: b.transactionId, practitionerId: need.naledisId, providerId, status: need.status, payload: { needId: need.id, needType: need.type } });
+      persist();
+      return send(res, 200, { transactionId: b.transactionId, revoked: true, providerId });
     }
 
     if (path === '/internal/register') {
