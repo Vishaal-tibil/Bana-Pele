@@ -87,9 +87,13 @@ function trigger(action, message, txId, opts = {}) {
   // this same relay) is a "contract" object. needId/providerId are
   // carried as commitments[0].resources[0].id / participants[0].id
   // respectively, reusing that exact structure for our domain.
-  function buildContract(needId, providerId, statusCode) {
+  // sharedContext (UC2): what Naledi allows the chosen Thabo to see, sent
+  // on select/init only, as JSON in the contract's descriptor (the schema has
+  // no free-form field for it).
+  function buildContract(needId, providerId, statusCode, sharedContext) {
     return {
       id: 'contract-' + needId,
+      ...(sharedContext ? { descriptor: { name: 'shared-context', longDesc: JSON.stringify(sharedContext) } } : {}),
       participants: [{ id: providerId, descriptor: { name: providerId, code: 'provider' } }],
       commitments: [
         {
@@ -119,11 +123,16 @@ function trigger(action, message, txId, opts = {}) {
           children: message.children,
           title: message.title,
           description: message.description,
+          language: message.language,
+          deliveryMode: message.deliveryMode,
+          urgency: message.urgency,
+          roles: message.roles,
+          excludeThaboRefs: message.excludeThaboRefs,
         }),
       },
     };
   } else if (STATUS_FOR_ACTION[action]) {
-    outgoingMessage = { contract: buildContract(message.needId, message.providerId, STATUS_FOR_ACTION[action]) };
+    outgoingMessage = { contract: buildContract(message.needId, message.providerId, STATUS_FOR_ACTION[action], ['select', 'init'].includes(action) ? message.sharedContext : undefined) };
   } else {
     outgoingMessage = message;
   }

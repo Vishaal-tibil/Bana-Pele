@@ -72,7 +72,9 @@ function bapDb(pool, log) {
         transaction_id: tx.transactionId, practitioner_id: tx.practitionerId, need_type: tx.needType,
         region: tx.region || '', status: tx.status, order_status: tx.order.status, need_id: tx.order.needId,
         provider_id: tx.order.providerId, results: tx.results, offers: tx.offers, created_at: tx.createdAt,
-        request: tx.title || tx.description ? { title: tx.title || null, description: tx.description || null } : null,
+        request: tx.title || tx.description || tx.language || tx.deliveryMode || tx.urgency || tx.roles || tx.excludeThaboRefs
+          ? { title: tx.title || null, description: tx.description || null, language: tx.language || null, deliveryMode: tx.deliveryMode || null, urgency: tx.urgency || null, roles: tx.roles || null, excludeThaboRefs: tx.excludeThaboRefs || null, referrals: tx.referrals && tx.referrals.length ? tx.referrals : null }
+          : tx.referrals && tx.referrals.length ? { referrals: tx.referrals } : null,
       })),
       outbox: ob.toRows(S.outbox),
     }),
@@ -85,7 +87,11 @@ function bapDb(pool, log) {
           transactionId: r.transaction_id, practitionerId: r.practitioner_id, needType: r.need_type, region: r.region,
           createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at, status: r.status,
           results: r.results || [], offers: r.offers || [],
-          ...(r.request ? { title: r.request.title || undefined, description: r.request.description || undefined } : {}),
+          ...(r.request ? {
+            title: r.request.title || undefined, description: r.request.description || undefined, language: r.request.language || undefined,
+            deliveryMode: r.request.deliveryMode || undefined, urgency: r.request.urgency || undefined, roles: r.request.roles || undefined,
+            excludeThaboRefs: r.request.excludeThaboRefs || undefined, referrals: r.request.referrals || undefined,
+          } : {}),
           order: { status: r.order_status, needId: r.need_id, providerId: r.provider_id },
           history: [], // the full history lives in tx_log
         };
@@ -103,6 +109,11 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
   const EVENTS_API_KEY = process.env.EVENTS_API_KEY || API_KEY;
   const STATE_FILE = process.env.STATE_FILE || '';
   const DISCOVER_TTL = process.env.DISCOVER_TTL || undefined;
+  const DELIVERY_MODES = ['in_person', 'remote', 'either'];
+  const URGENCIES = ['low', 'normal', 'high'];
+  const SHARED_CONTEXT_MAX = 4000;
+  const ROLE_CODE = /^[a-z][a-z0-9_]{1,63}$/;
+  const isThaboRef = (r) => r && typeof r === 'object' && typeof r.app === 'string' && r.app && r.userId != null && String(r.userId) !== '';
 
   const store = createStore(STATE_FILE, { epoch: 1, transactions: {}, outbox: [] }, pool ? bapDb(pool, log) : null);
   const S = store.state;
@@ -193,6 +204,11 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
       needType: tx.needType,
       title: tx.title || null,
       description: tx.description || null,
+      language: tx.language || null,
+      deliveryMode: tx.deliveryMode || null,
+      urgency: tx.urgency || null,
+      roles: tx.roles || null,
+      referralsCount: (tx.referrals || []).length,
       status: tx.order.status !== 'none' ? tx.order.status : tx.status,
       order: tx.order,
       resultsCount: tx.results.length,
@@ -259,7 +275,7 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
     }
 
     // ---- provider-side calls are relayed to the provider app on the internal network ----
-    const providerMatch = path.match(/^\/v1\/provider\/(offer|decision|complete|register)$/);
+    const providerMatch = path.match(/^\/v1\/provider\/(offer|decision|complete|register|refer)$/);
     if (providerMatch) {
       if (req.method !== 'POST') return send(res, 405, { error: 'method_not_allowed' });
       const body = await readJson(req);
@@ -285,6 +301,19 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
       if (!b.practitionerId || !b.needType) {
         return send(res, 400, { error: 'invalid_request', message: 'practitionerId and needType are required' });
       }
+      // UC2 preferences, passed to matching: language (any code, e.g. "zu"),
+      // deliveryMode (a filter) and urgency (ordering only).
+      const bad = (v, allowed) => v != null && v !== '' && !allowed.includes(v);
+      if (bad(b.deliveryMode, DELIVERY_MODES)) return send(res, 400, { error: 'invalid_request', message: `deliveryMode must be one of ${DELIVERY_MODES.join(', ')}` });
+      if (bad(b.urgency, URGENCIES)) return send(res, 400, { error: 'invalid_request', message: `urgency must be one of ${URGENCIES.join(', ')}` });
+      // roles: the kinds of Thabo her need calls for, as taxonomy codes
+      // (e.g. "social_worker"); excludeThaboRefs: people she already works with.
+      if (b.roles != null && !(Array.isArray(b.roles) && b.roles.length <= 10 && b.roles.every((r) => typeof r === 'string' && ROLE_CODE.test(r)))) {
+        return send(res, 400, { error: 'invalid_request', message: 'roles must be a list of up to 10 role codes like "ecd_coach"' });
+      }
+      if (b.excludeThaboRefs != null && !(Array.isArray(b.excludeThaboRefs) && b.excludeThaboRefs.length <= 50 && b.excludeThaboRefs.every(isThaboRef))) {
+        return send(res, 400, { error: 'invalid_request', message: 'excludeThaboRefs must be a list of up to 50 { app, userId }' });
+      }
       const transactionId = uuid();
       res.txId = transactionId;
       const tx = {
@@ -294,6 +323,11 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
         region: b.region ? String(b.region) : '',
         title: b.title ? String(b.title).slice(0, 200) : undefined,
         description: b.description ? String(b.description).slice(0, 2000) : undefined,
+        language: b.language ? String(b.language).slice(0, 20) : undefined,
+        deliveryMode: b.deliveryMode || undefined,
+        urgency: b.urgency || undefined,
+        roles: b.roles && b.roles.length ? b.roles : undefined,
+        excludeThaboRefs: b.excludeThaboRefs && b.excludeThaboRefs.length ? b.excludeThaboRefs.map((r) => ({ app: String(r.app), userId: String(r.userId) })) : undefined,
         createdAt: nowIso(),
         status: 'searching',
         results: [],
@@ -302,11 +336,11 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
         history: [],
       };
       S.transactions[transactionId] = tx; // stored before sending: the callback can beat the ACK
-      note(tx, 'search requested', { needType: tx.needType, region: tx.region });
+      note(tx, 'search requested', { needType: tx.needType, region: tx.region, language: tx.language, deliveryMode: tx.deliveryMode, urgency: tx.urgency, roles: tx.roles, excluded: tx.excludeThaboRefs ? tx.excludeThaboRefs.length : undefined });
       store.save();
       const r = await trigger(
         'discover',
-        { needType: tx.needType, region: tx.region, practitionerId: tx.practitionerId, tier: b.tier, children: b.children, title: tx.title, description: tx.description },
+        { needType: tx.needType, region: tx.region, practitionerId: tx.practitionerId, tier: b.tier, children: b.children, title: tx.title, description: tx.description, language: tx.language, deliveryMode: tx.deliveryMode, urgency: tx.urgency, roles: tx.roles, excludeThaboRefs: tx.excludeThaboRefs },
         transactionId,
         { ttl: DISCOVER_TTL }
       );
@@ -348,10 +382,10 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
       const tx = S.transactions[txGet[2]];
       if (!tx) return send(res, 404, { error: 'unknown_transaction' });
       if (txGet[1] === 'results') {
-        return send(res, 200, { transactionId: tx.transactionId, status: tx.status, results: tx.results, offers: tx.offers });
+        return send(res, 200, { transactionId: tx.transactionId, status: tx.status, results: tx.results, offers: tx.offers, referrals: tx.referrals || [] });
       }
       if (txGet[1] === 'log') return send(res, 200, tx.history);
-      return send(res, 200, { ...summary(tx), results: tx.results, offers: tx.offers, epoch: S.epoch });
+      return send(res, 200, { ...summary(tx), results: tx.results, offers: tx.offers, referrals: tx.referrals || [], epoch: S.epoch });
     }
 
     if (req.method === 'POST' && path === '/v1/select') {
@@ -367,13 +401,22 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
         if (tx.order.providerId === b.providerId) return send(res, 200, { transactionId: tx.transactionId, status: tx.order.status, idempotent: true });
         return send(res, 409, { error: 'already_in_progress', status: tx.order.status, providerId: tx.order.providerId });
       }
+      // What Naledi allows this Thabo to see (UC2): an object, sent only to the
+      // provider she selected.
+      let sharedContext;
+      if (b.sharedContext != null) {
+        if (typeof b.sharedContext !== 'object' || Array.isArray(b.sharedContext)) return send(res, 400, { error: 'invalid_request', message: 'sharedContext must be an object' });
+        if (JSON.stringify(b.sharedContext).length > SHARED_CONTEXT_MAX) return send(res, 400, { error: 'invalid_request', message: `sharedContext is too large (max ${SHARED_CONTEXT_MAX} characters)` });
+        sharedContext = b.sharedContext;
+      }
       const needId = `${b.practitionerId}:${b.needType}`;
       tx.order = { status: 'pending', needId, providerId: b.providerId };
       selectedAt.set(tx.transactionId, Date.now());
-      note(tx, 'select requested', { needId, providerId: b.providerId });
+      // Only which fields were shared goes in the log, not their values.
+      note(tx, 'select requested', { needId, providerId: b.providerId, ...(sharedContext ? { sharedFields: Object.keys(sharedContext) } : {}) });
       store.save();
-      let r = await trigger('select', { needId, providerId: b.providerId }, tx.transactionId);
-      if (r.ok) r = await trigger('init', { needId, providerId: b.providerId }, tx.transactionId);
+      let r = await trigger('select', { needId, providerId: b.providerId, sharedContext }, tx.transactionId);
+      if (r.ok) r = await trigger('init', { needId, providerId: b.providerId, sharedContext }, tx.transactionId);
       if (!r.ok) {
         tx.order.status = 'error';
         note(tx, 'network rejected select/init', { detail: r.text || r.error });
@@ -502,7 +545,19 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
         } catch (e) {
           d = { name: r.descriptor && r.descriptor.name };
         }
-        if (d.type === 'offer') {
+        if (d.type === 'referral') {
+          // A Thabo redirected Naledi to another Thabo (UC2): the referred Thabo
+          // joins her results, so she can select them on this same request.
+          const to = d.referTo || {};
+          if (to.providerId && !(tx.referrals || []).some((x) => x.referralId === d.referralId)) {
+            const referral = { referralId: d.referralId, fromProviderId: d.fromProviderId, referTo: to, note: d.note || null, receivedAt: nowIso() };
+            tx.referrals = [...(tx.referrals || []), referral];
+            const known = tx.results.find((x) => x.providerId === to.providerId);
+            if (known) known.referredBy = d.fromProviderId;
+            else tx.results.push({ ...to, referredBy: d.fromProviderId });
+            emit('referral.received', tx, { providerId: to.providerId, status: 'referred', payload: referral });
+          }
+        } else if (d.type === 'offer') {
           const offerId = d.offerId || r.id;
           if (!tx.offers.find((o) => o.offerId === offerId)) {
             const offer = { offerId, title: d.title, area: d.area, note: d.note, providerId: d.providerId, providerName: d.providerName, receivedAt: nowIso() };
