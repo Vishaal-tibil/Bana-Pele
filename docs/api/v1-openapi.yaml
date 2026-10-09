@@ -390,6 +390,69 @@ paths:
         '404': { description: No request is waiting for this Thabo on that transaction }
         '502': { $ref: '#/components/responses/NetworkRejected' }
 
+  /v1/provider/contribution:
+    post:
+      tags: ["7. Complete"]
+      operationId: recordContribution
+      summary: Record what the Thabo did (UC2 step 9)
+      description: |
+        The provider holding the need on this transaction (accepted or done)
+        records support provided, an agreed action, a milestone, a status
+        update, a follow-up, evidence, or a new need they spotted. It shows in
+        `GET /v1/commitments` (`contributions`, `nextFollowUp`) and is sent as a
+        `contribution.recorded` event. A `new_need` names its `newNeedType`; the
+        front door decides whether to start a search for it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transactionId, type, summary]
+              properties:
+                transactionId: { type: string }
+                providerId: { type: string, description: Only needed to say which provider is recording }
+                type: { type: string, enum: [support_provided, agreed_action, milestone, status_update, follow_up, evidence, new_need] }
+                summary: { type: string, maxLength: 500 }
+                details: { type: string, maxLength: 2000 }
+                dueDate: { type: string, example: '2026-10-20', description: Required for follow_up }
+                evidenceRef: { type: string, maxLength: 500, description: A link to the evidence in the Thabo's own app }
+                newNeedType: { $ref: '#/components/schemas/NeedType' }
+            example: { transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0, type: agreed_action, summary: Prepare a costed five-day meal plan, dueDate: '2026-10-22' }
+      responses:
+        '201':
+          description: Recorded
+          content:
+            application/json:
+              example: { id: con-1a2b3c4d, at: '2026-10-08T10:00:00.000Z', providerId: thabo-zanele, coachId: null, type: agreed_action, summary: Prepare a costed five-day meal plan, dueDate: '2026-10-22', needId: 'prac_naledi_mahlangu:nutrition', nextFollowUp: '2026-10-15' }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { description: 'not_holding: only the provider who accepted this request can record' }
+
+  /v1/consent/revoke:
+    post:
+      tags: ["5. Decide"]
+      operationId: revokeSharedContext
+      summary: Naledi takes back the context she shared (UC2 step 10)
+      description: |
+        Removes the `sharedContext` she gave a provider on this request, even
+        while they are still helping (the request itself stays). The provider's
+        app gets a `context.revoked` event and should drop its copy. Safe to
+        repeat (`revoked: false` when nothing is shared).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [transactionId], properties: { transactionId: { type: string } } }
+      responses:
+        '200':
+          description: Done
+          content:
+            application/json:
+              example: { transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0, revoked: true, providerId: thabo-zanele }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
   /v1/provider/register:
     post:
       tags: ["7. Complete"]

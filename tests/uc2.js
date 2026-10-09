@@ -182,6 +182,34 @@ function startPartner() {
   check('she accepts the referral by selecting that Thabo -> 202', sel4.status === 202, sel4);
   await api('POST', '/v1/provider/decision', { transactionId: zanele.tx, decision: 'accept', coachId: zanele.providerId });
   check('the referred Thabo accepts -> reserved', !!(await until(async () => (await api('GET', `/v1/status/${zanele.tx}`)).body.status === 'reserved')));
+  section('the Thabo records contributions (UC2 step 9)');
+  const contrib = (b) => api('POST', '/v1/provider/contribution', { transactionId: zanele.tx, ...b });
+  check('unknown type -> 400', (await contrib({ type: 'gossip', summary: 'x' })).status === 400);
+  check('no summary -> 400', (await contrib({ type: 'support_provided' })).status === 400);
+  check('follow_up without a date -> 400', (await contrib({ type: 'follow_up', summary: 'check in' })).status === 400);
+  check('new_need without a need type -> 400', (await contrib({ type: 'new_need', summary: 'hygiene' })).status === 400);
+  check('someone else\'s request -> 409', (await contrib({ type: 'support_provided', summary: 'x', providerId: 'provider-not-me' })).status === 409);
+  const day = (d) => new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
+  const c1 = await contrib({ type: 'support_provided', summary: 'Nutrition planning session', details: 'Reviewed the weekly menu' });
+  const c2 = await contrib({ type: 'agreed_action', summary: 'Prepare a costed five-day meal plan', dueDate: day(14) });
+  const c3 = await contrib({ type: 'follow_up', summary: 'Observation visit', dueDate: day(7) });
+  const c4 = await contrib({ type: 'evidence', summary: 'Menu and purchasing list', evidenceRef: 'elevate://evidence/123' });
+  const c5 = await contrib({ type: 'new_need', summary: 'Food-preparation area may not meet hygiene requirements', newNeedType: 'health-safety' });
+  check('five contributions recorded -> 201', [c1, c2, c3, c4, c5].every((r) => r.status === 201), [c1, c2, c3, c4, c5].map((r) => r.status));
+  const r6 = await row('nutrition');
+  check('they appear in the shared view, in order', r6 && (r6.contributions || []).map((c) => c.type).join() === 'support_provided,agreed_action,follow_up,evidence,new_need', r6 && r6.contributions);
+  check('nextFollowUp is the earliest upcoming date', r6 && r6.nextFollowUp === day(7), r6 && r6.nextFollowUp);
+  check('each one names the Thabo who recorded it', r6 && r6.contributions.every((c) => c.providerId === zanele.providerId), r6 && r6.contributions.map((c) => c.providerId));
+  check('the new need is named', r6 && r6.contributions[4].newNeedType === 'health-safety', r6 && r6.contributions[4]);
+
+  section('Naledi takes back what she shared (UC2 step 10)');
+  const rv = await api('POST', '/v1/consent/revoke', { transactionId: zanele.tx });
+  check('revoke -> 200, revoked', rv.status === 200 && rv.body.revoked === true && rv.body.providerId === zanele.providerId, rv);
+  const r7 = await row('nutrition');
+  check('the Thabo no longer sees the context, and still holds the need', r7 && r7.sharedContext === null && r7.status === 'reserved', r7 && { sharedContext: r7.sharedContext, status: r7.status });
+  const rv2 = await api('POST', '/v1/consent/revoke', { transactionId: zanele.tx });
+  check('revoking again is harmless -> revoked: false', rv2.status === 200 && rv2.body.revoked === false, rv2);
+
   const w = await api('POST', '/v1/withdraw', { transactionId: zanele.tx });
   check('Naledi withdraws', [200, 202].includes(w.status), w);
   await until(async () => (await api('GET', `/v1/status/${zanele.tx}`)).body.status === 'withdrawn');

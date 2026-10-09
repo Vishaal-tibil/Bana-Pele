@@ -16,6 +16,9 @@
 //   POST /v1/provider/decision   -> provider side (accept / decline + coach)
 //   POST /v1/provider/complete   -> provider side (mark support delivered)
 //   POST /v1/provider/register   -> provider side (add a new NGO/Thabo to the directory)
+//   POST /v1/provider/refer      -> provider side (redirect Naledi to another Thabo, UC2)
+//   POST /v1/provider/contribution -> provider side (record support, actions, follow-ups, UC2)
+//   POST /v1/consent/revoke      Naledi takes back the context she shared (UC2)
 //   GET  /v1/commitments         who holds which need (per-Naledi shared view, UC1)
 //   GET|POST /v1/subscriptions   NGO webhooks: new matches, requests, status changes (UC1)
 //   DELETE /v1/subscriptions/{id}
@@ -275,7 +278,9 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
     }
 
     // ---- provider-side calls are relayed to the provider app on the internal network ----
-    const providerMatch = path.match(/^\/v1\/provider\/(offer|decision|complete|register|refer)$/);
+    // POST /v1/consent/revoke is Naledi's, but the shared context lives on the provider side.
+    const providerMatch = path.match(/^\/v1\/provider\/(offer|decision|complete|register|refer|contribution)$/) ||
+      (path === '/v1/consent/revoke' && [null, 'revoke-context']);
     if (providerMatch) {
       if (req.method !== 'POST') return send(res, 405, { error: 'method_not_allowed' });
       const body = await readJson(req);

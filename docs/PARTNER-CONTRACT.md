@@ -135,6 +135,14 @@ redirect with `POST /v1/provider/refer { transactionId, referTo: { providerId, .
 their request is declined and the referred Thabo appears in her results
 (`referrals`, `referredBy`), with a `referral.received` event.
 
+After accepting, the Thabo records what happened with
+`POST /v1/provider/contribution { transactionId, type, summary, details, dueDate, evidenceRef, newNeedType }`
+(`type`: `support_provided`, `agreed_action`, `milestone`, `status_update`,
+`follow_up`, `evidence`, `new_need`). Contributions show in the commitments row
+(`contributions`, `nextFollowUp`) and arrive as `contribution.recorded` events.
+Naledi can take back what she shared with `POST /v1/consent/revoke { transactionId }`;
+the Thabo's app gets `context.revoked` and should drop its copy.
+
 ### 2. `POST /network/events`
 
 I push events here. Answer with any 2xx code, quickly. Body:
