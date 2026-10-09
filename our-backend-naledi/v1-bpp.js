@@ -117,6 +117,16 @@ const SCHEMA = [
    )`,
   // What the practitioner wrote when asking (title, description); added later, hence ALTER.
   `ALTER TABLE tx_meta ADD COLUMN IF NOT EXISTS request jsonb`,
+  // UC3: progress events on a practitioner's capability journey.
+  `CREATE TABLE IF NOT EXISTS progress (
+     id              text PRIMARY KEY,
+     practitioner_id text NOT NULL,
+     event           text NOT NULL,
+     at              timestamptz NOT NULL,
+     data            jsonb NOT NULL DEFAULT '{}',
+     received_at     timestamptz NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS progress_practitioner ON progress (practitioner_id, at)`,
 ];
 
 const TABLES = {
@@ -129,6 +139,7 @@ const TABLES = {
   outbox: OUTBOX_TABLE,
   subscriptions: { pk: 'id', order: 'created_at', cols: ['id', 'url', 'secret', 'name', 'provider_ids', 'need_types', 'regions', 'events', 'created_at'], json: ['provider_ids', 'need_types', 'regions', 'events'] },
   sub_outbox: TARGETED_OUTBOX_TABLE,
+  progress: { pk: 'id', order: 'received_at', cols: ['id', 'practitioner_id', 'event', 'at', 'data', 'received_at'], json: ['data'] },
 };
 
 const pick = (o, known) => Object.fromEntries(Object.entries(o).filter(([key]) => !known.includes(key)));
@@ -167,6 +178,10 @@ function bppDb(pool, log) {
           regions: x.regions, events: x.events, created_at: x.createdAt,
         })),
         sub_outbox: sob.toRows(S.subOutbox),
+        progress: (S.progress || []).map((e) => ({
+          id: e.id, practitioner_id: e.practitionerId, event: e.event, at: e.at, received_at: e.receivedAt,
+          data: pick(e, ['id', 'practitionerId', 'event', 'at', 'receivedAt']),
+        })),
       };
     },
     fromRows: (S, rows) => {
@@ -203,6 +218,7 @@ function bppDb(pool, log) {
         };
       }
       S.subOutbox = sob.fromRows(rows.sub_outbox);
+      S.progress = (rows.progress || []).map((r) => ({ ...(r.data || {}), id: r.id, practitionerId: r.practitioner_id, event: r.event, at: iso(r.at), receivedAt: iso(r.received_at) }));
     },
   };
 }
@@ -242,7 +258,7 @@ module.exports = function createV1Bpp(k) {
   const STATE_FILE = process.env.STATE_FILE || '';
   const WAIT_FOR_REQUEST_MS = Number(process.env.WAIT_FOR_REQUEST_MS || 4000);
 
-  const store = createStore(STATE_FILE, { epoch: 1, txMeta: {}, snapshot: null, outbox: [], subscriptions: {}, subOutbox: [] }, pool ? bppDb(pool, log) : null);
+  const store = createStore(STATE_FILE, { epoch: 1, txMeta: {}, snapshot: null, outbox: [], subscriptions: {}, subOutbox: [], progress: [] }, pool ? bppDb(pool, log) : null);
   const S = store.state;
   const outbox = createOutbox({ store, name: 'bpp-events', url: EVENTS_URL, key: EVENTS_API_KEY, log });
   // NGO subscriptions: same event shapes, delivered to each subscriber that asked for them.
@@ -254,7 +270,16 @@ module.exports = function createV1Bpp(k) {
       return sub ? { url: sub.url, key: sub.secret } : null;
     },
   });
-  const SUB_EVENTS = ['practitioner.matched', 'request.received', 'status.changed', 'contribution.recorded', 'context.revoked'];
+  const SUB_EVENTS = ['practitioner.matched', 'request.received', 'status.changed', 'contribution.recorded', 'context.revoked', 'progress.updated'];
+
+  // UC3: progress on a practitioner's capability journey, pushed by Elevate's
+  // project-service (and later other learning providers). Kept for her journey
+  // view and offered to subscribers as progress.updated.
+  const PROGRESS_EVENTS = ['enrolled', 'learning_started', 'module_completed', 'assessment_completed', 'support_requested', 'milestone_delayed',
+    'credential_earned', 'practical_demonstration_required', 'specialist_support_requested', 'referral_made', 'observation_completed',
+    'practical_evidence_submitted'];
+  const MAX_PROGRESS_PER_PRACTITIONER = 500;
+  const str = (v, max) => (typeof v === 'string' && v ? v.slice(0, max) : undefined);
 
   // UC2 step 9: what a Thabo records after helping. One list per need, newest last.
   const CONTRIBUTION_TYPES = ['support_provided', 'agreed_action', 'milestone', 'status_update', 'follow_up', 'evidence', 'new_need'];
@@ -651,10 +676,20 @@ module.exports = function createV1Bpp(k) {
       S.txMeta = {};
       S.outbox = [];
       S.subOutbox = []; // subscriptions themselves are configuration and survive a reset
+      S.progress = [];
       S.epoch += 1;
       persist();
       log.info('admin.reset', { epoch: S.epoch });
       return send(res, 200, { epoch: S.epoch });
+    }
+
+    if (req.method === 'GET' && path === '/internal/progress') {
+      const q = Object.fromEntries(new URL(req.url, 'http://x').searchParams);
+      if (!q.practitionerId) return send(res, 400, { error: 'invalid_request', message: 'practitionerId is required' });
+      const list = (S.progress || []).filter((e) => e.practitionerId === q.practitionerId &&
+        (!q.capability || e.capability === q.capability) && (!q.event || e.event === q.event) && (!q.since || e.at >= q.since))
+        .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+      return send(res, 200, { practitionerId: q.practitionerId, count: list.length, progress: list });
     }
 
     if (req.method !== 'POST') return send(res, 405, { error: 'method_not_allowed' });
@@ -825,6 +860,58 @@ module.exports = function createV1Bpp(k) {
       emit('context.revoked', { transactionId: b.transactionId, practitionerId: need.naledisId, providerId, status: need.status, payload: { needId: need.id, needType: need.type } });
       persist();
       return send(res, 200, { transactionId: b.transactionId, revoked: true, providerId });
+    }
+
+    if (path === '/internal/progress') {
+      if (!b.practitionerId || typeof b.practitionerId !== 'string') return send(res, 400, { error: 'invalid_request', message: 'practitionerId is required' });
+      if (!PROGRESS_EVENTS.includes(b.event)) return send(res, 400, { error: 'invalid_request', message: `event must be one of ${PROGRESS_EVENTS.join(', ')}`, events: PROGRESS_EVENTS });
+      if (b.at != null && (typeof b.at !== 'string' || Number.isNaN(Date.parse(b.at)))) return send(res, 400, { error: 'invalid_request', message: 'at must be a date-time' });
+      if (b.needType != null && !k.NEED_TYPES.includes(b.needType)) return send(res, 400, { error: 'invalid_request', message: 'needType must be one of the need types', needTypes: k.NEED_TYPES });
+      const source = { app: str(b.source && b.source.app, 50) || 'elevate', ...(str(b.source && b.source.service, 50) ? { service: str(b.source.service, 50) } : {}) };
+      // The source's own id makes a repeated push harmless.
+      const sourceId = str(b.eventId, 200);
+      if (sourceId) {
+        const seen = (S.progress || []).find((e) => e.source.app === source.app && e.sourceEventId === sourceId);
+        if (seen) return send(res, 200, { ...seen, duplicate: true });
+      }
+      const ref = b.thaboRef && typeof b.thaboRef === 'object' && b.thaboRef.app && b.thaboRef.userId != null ? { app: String(b.thaboRef.app), userId: String(b.thaboRef.userId) } : undefined;
+      const act = b.activity && typeof b.activity === 'object' ? Object.fromEntries(Object.entries({ id: str(b.activity.id, 200), title: str(b.activity.title, 200), kind: str(b.activity.kind, 50) }).filter(([, v]) => v)) : undefined;
+      const e = Object.fromEntries(Object.entries({
+        id: `prog-${uuid().slice(0, 8)}`,
+        practitionerId: b.practitionerId.slice(0, 200),
+        event: b.event,
+        at: b.at ? new Date(b.at).toISOString() : nowIso(),
+        receivedAt: nowIso(),
+        source,
+        sourceEventId: sourceId,
+        capability: str(b.capability, 100),
+        needType: b.needType || undefined,
+        region: str(b.region, 100),
+        activity: act && Object.keys(act).length ? act : undefined,
+        thaboRef: ref,
+        evidenceRef: str(b.evidenceRef, 500),
+        details: str(b.details, 2000),
+      }).filter(([, v]) => v !== undefined));
+      S.progress = S.progress || [];
+      S.progress.push(e);
+      const mine = S.progress.filter((x) => x.practitionerId === e.practitionerId);
+      if (mine.length > MAX_PROGRESS_PER_PRACTITIONER) {
+        const drop = new Set(mine.slice(0, mine.length - MAX_PROGRESS_PER_PRACTITIONER).map((x) => x.id));
+        S.progress = S.progress.filter((x) => !drop.has(x.id));
+      }
+      store.save();
+      log.info('progress.received', { practitionerId: e.practitionerId, progressId: e.id, event: e.event, capability: e.capability, source: source.app });
+      // To subscribers only: the partner is where it came from.
+      notifySubscribers({
+        event: 'progress.updated',
+        epoch: S.epoch,
+        transactionId: null,
+        practitionerId: e.practitionerId,
+        providerId: null,
+        status: e.event,
+        payload: { ...e, region: e.region || (k.naledis.get(e.practitionerId) || {}).region || null },
+      });
+      return send(res, 201, { ...e, duplicate: false });
     }
 
     if (path === '/internal/register') {

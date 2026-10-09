@@ -143,6 +143,16 @@ After accepting, the Thabo records what happened with
 Naledi can take back what she shared with `POST /v1/consent/revoke { transactionId }`;
 the Thabo's app gets `context.revoked` and should drop its copy.
 
+UC3 (capability journey): Elevate's project-service pushes progress with
+`POST /v1/progress { eventId, practitionerId, event, at, source, capability, needType, activity, thaboRef, evidenceRef, details }`
+(`event`: `enrolled`, `learning_started`, `module_completed`, `assessment_completed`,
+`support_requested`, `milestone_delayed`, `credential_earned`,
+`practical_demonstration_required`, `specialist_support_requested`, `referral_made`,
+`observation_completed`, `practical_evidence_submitted`). Her journey view is
+`GET /v1/progress?practitionerId=...` (filters: `capability`, `event`, `since`).
+Other participants subscribe to `progress.updated` through `/v1/subscriptions`;
+it is not echoed back to your events endpoint.
+
 ### 2. `POST /network/events`
 
 I push events here. Answer with any 2xx code, quickly. Body:

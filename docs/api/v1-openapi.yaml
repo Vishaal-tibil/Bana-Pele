@@ -453,6 +453,63 @@ paths:
         '400': { $ref: '#/components/responses/InvalidRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
+  /v1/progress:
+    post:
+      tags: ["8. Journey"]
+      operationId: pushProgress
+      summary: Push a capability-journey event (UC3)
+      description: |
+        Elevate's project-service (and later other learning providers) pushes
+        progress on a practitioner's capability journey. It is kept for her
+        journey view (`GET /v1/progress`) and offered to subscribers as
+        `progress.updated` (subscribe with `events: ["progress.updated"]`,
+        optionally filtered by `needTypes` and `regions`). It is not sent back
+        to the partner's events endpoint, since the partner is the source.
+        Send your own `eventId`: a repeated push returns `duplicate: true`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [practitionerId, event]
+              properties:
+                eventId: { type: string, description: The source's own id; makes a repeated push harmless }
+                practitionerId: { type: string }
+                event: { type: string, enum: [enrolled, learning_started, module_completed, assessment_completed, support_requested, milestone_delayed, credential_earned, practical_demonstration_required, specialist_support_requested, referral_made, observation_completed, practical_evidence_submitted] }
+                at: { type: string, format: date-time, description: When it happened (default now) }
+                source: { type: object, properties: { app: { type: string, example: elevate }, service: { type: string, example: project-service } } }
+                capability: { type: string, example: nutrition_planning }
+                needType: { $ref: '#/components/schemas/NeedType' }
+                region: { type: string }
+                activity: { type: object, properties: { id: { type: string }, title: { type: string }, kind: { type: string, example: module } } }
+                thaboRef: { $ref: '#/components/schemas/ThaboRef' }
+                evidenceRef: { type: string }
+                details: { type: string, maxLength: 2000 }
+            example: { eventId: ps-evt-981, practitionerId: prac_naledi_mahlangu, event: module_completed, at: '2026-10-09T09:00:00Z', source: { app: elevate, service: project-service }, capability: nutrition_planning, needType: nutrition, activity: { id: mod-1, title: Balanced menus, kind: module } }
+      responses:
+        '201': { description: Stored (duplicate false) }
+        '200': { description: 'Already received (duplicate: true), not stored again' }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    get:
+      tags: ["8. Journey"]
+      operationId: getProgress
+      summary: A practitioner's capability journey (UC3)
+      parameters:
+        - { name: practitionerId, in: query, required: true, schema: { type: string } }
+        - { name: capability, in: query, schema: { type: string } }
+        - { name: event, in: query, schema: { type: string } }
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: Her progress events, oldest first
+          content:
+            application/json:
+              example: { practitionerId: prac_naledi_mahlangu, count: 1, progress: [ { id: prog-1a2b3c4d, practitionerId: prac_naledi_mahlangu, event: module_completed, at: '2026-10-09T09:00:00.000Z', receivedAt: '2026-10-09T09:00:01.000Z', source: { app: elevate, service: project-service }, sourceEventId: ps-evt-981, capability: nutrition_planning, needType: nutrition } ] }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
   /v1/provider/register:
     post:
       tags: ["7. Complete"]

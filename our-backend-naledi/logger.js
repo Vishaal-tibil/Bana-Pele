@@ -25,6 +25,19 @@
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
+// Naledi's shared context (UC2) rides in select/init as JSON in the
+// contract's descriptor. Logs keep which fields were shared, never the values.
+function redact(payload) {
+  const d = payload && payload.message && payload.message.contract && payload.message.contract.descriptor;
+  if (!d || d.name !== 'shared-context' || typeof d.longDesc !== 'string') return payload;
+  let fields = [];
+  try { fields = Object.keys(JSON.parse(d.longDesc) || {}); } catch (e) { /* not JSON: still hidden */ }
+  return {
+    ...payload,
+    message: { ...payload.message, contract: { ...payload.message.contract, descriptor: { ...d, longDesc: `[redacted: ${fields.join(', ')}]` } } },
+  };
+}
+
 function createLogger(service) {
   const min = LEVELS[String(process.env.LOG_LEVEL || 'info').toLowerCase()] || LEVELS.info;
   const bodyLimit = Number(process.env.LOG_BODY_LIMIT || 20000);
@@ -165,6 +178,7 @@ function createLogger(service) {
     // A Beckn message crossing between our app and its onix adapter.
     message(direction, payload, extra = {}) {
       const c = (payload && payload.context) || {};
+      payload = redact(payload);
       write('info', direction === 'out' ? 'beckn.out' : 'beckn.in', {
         transactionId: c.transactionId,
         messageId: c.messageId,
