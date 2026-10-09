@@ -510,6 +510,202 @@ paths:
         '400': { $ref: '#/components/responses/InvalidRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
+  /v1/identity/links:
+    post:
+      tags: ["8. Journey"]
+      operationId: linkIdentity
+      summary: Link an app user to a practitioner (UC3 step 1)
+      description: |
+        Links her id in another application (e.g. Elevate) to her network
+        practitionerId, so that app can push progress with its own id
+        (`user: { app, userId }` on `POST /v1/progress`). One app user belongs
+        to one practitioner (409 otherwise); repeating a link is harmless.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [practitionerId, app, userId], properties: { practitionerId: { type: string }, app: { type: string, example: elevate }, userId: { type: string } } }
+      responses:
+        '201': { description: Linked }
+        '200': { description: 'Already linked (idempotent: true)' }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '409': { description: 'already_linked: this app user belongs to another practitioner' }
+    get:
+      tags: ["8. Journey"]
+      operationId: getIdentityLinks
+      summary: Find her links, or the practitioner behind an app user
+      parameters:
+        - { name: practitionerId, in: query, schema: { type: string } }
+        - { name: app, in: query, schema: { type: string } }
+        - { name: userId, in: query, schema: { type: string } }
+      responses:
+        '200': { description: '{ practitionerId, links } by practitionerId, or the link by app + userId' }
+        '404': { description: 'unknown_user' }
+
+  /v1/learning/offerings:
+    post:
+      tags: ["8. Journey"]
+      operationId: addLearningOffering
+      summary: A learning provider publishes an offering (UC3 step 3)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [providerId, title, capabilities]
+              properties:
+                providerId: { type: string }
+                providerName: { type: string }
+                title: { type: string }
+                description: { type: string }
+                capabilities: { type: array, items: { type: string }, example: [nutrition_planning], description: Capability codes it develops }
+                needTypes: { type: array, items: { $ref: '#/components/schemas/NeedType' } }
+                languages: { type: array, items: { type: string } }
+                deliveryModes: { type: array, items: { type: string, enum: [in_person, remote, blended] } }
+                regions: { type: array, items: { type: string }, description: Empty means anywhere; remote-only offerings ignore region }
+                cost: { oneOf: [ { type: string, enum: [free] }, { type: object, properties: { amount: { type: number }, currency: { type: string }, fundedBy: { type: string } } } ] }
+                duration: { type: string, example: 4 weeks }
+                schedule: { type: string }
+                entryRequirements: { type: string }
+                needsDigitalAccess: { type: boolean }
+                url: { type: string }
+                thaboRef: { $ref: '#/components/schemas/ThaboRef' }
+      responses:
+        '201': { description: 'Published; the response carries offeringId' }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+    get:
+      tags: ["8. Journey"]
+      operationId: listLearningOfferings
+      summary: List offerings
+      parameters:
+        - { name: providerId, in: query, schema: { type: string } }
+        - { name: capability, in: query, schema: { type: string } }
+      responses:
+        '200': { description: '{ count, offerings }' }
+
+  /v1/learning/offerings/{offeringId}:
+    delete:
+      tags: ["8. Journey"]
+      operationId: removeLearningOffering
+      summary: Remove an offering
+      parameters: [ { name: offeringId, in: path, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: Removed }
+        '404': { description: unknown_offering }
+
+  /v1/learning/search:
+    post:
+      tags: ["8. Journey"]
+      operationId: searchLearning
+      summary: Find learning for a capability gap, over the network (UC3 step 3)
+      description: |
+        Sends a Beckn `discover` for learning offerings. Results arrive in
+        `GET /v1/results/{transactionId}` (each with `offeringId`, `providerId`,
+        title, capabilities, languages, deliveryModes, cost, duration,
+        entryRequirements, needsDigitalAccess). Filters left out do not filter;
+        an offering's empty fields match anything. If `LEARNING_MATCH_URL` is
+        set, an outside catalogue can add offerings with the same fields.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [practitionerId, capability]
+              properties:
+                practitionerId: { type: string }
+                capability: { type: string, example: nutrition_planning }
+                language: { type: string }
+                region: { type: string }
+                deliveryMode: { type: string, enum: [in_person, remote, either] }
+                maxCost: { type: number, minimum: 0 }
+                digitalAccess: { type: boolean, description: false leaves out offerings that need digital access }
+      responses:
+        '202': { description: 'Search sent: { transactionId, status: searching }' }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+
+  /v1/learning/enrol:
+    post:
+      tags: ["8. Journey"]
+      operationId: enrol
+      summary: Enrol in an offering; routed to the learning provider (UC3 step 4)
+      description: |
+        Sends a Beckn `confirm` for the offering to its provider. Status in
+        `GET /v1/status/{transactionId}` (`enrolments`): `requested`, then
+        `enrolled` or `declined` when the provider decides (`on_status`), or
+        `withdrawn`. Partner events: `enrolment.changed`. An accepted
+        enrolment adds `enrolled` to her journey (`GET /v1/progress`).
+        `sharedContext` goes only to that provider.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [transactionId, offeringId], properties: { transactionId: { type: string }, offeringId: { type: string }, sharedContext: { type: object } } }
+      responses:
+        '202': { description: 'Requested' }
+        '200': { description: 'Already requested or enrolled (idempotent)' }
+        '404': { description: 'unknown_offering: not in this search''s results' }
+        '409': { description: 'not_a_learning_search' }
+
+  /v1/learning/withdraw:
+    post:
+      tags: ["8. Journey"]
+      operationId: withdrawEnrolment
+      summary: Withdraw an enrolment (Beckn cancel)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [transactionId, offeringId], properties: { transactionId: { type: string }, offeringId: { type: string } } }
+      responses:
+        '202': { description: 'Withdrawing; becomes withdrawn' }
+
+  /v1/learning/enrolments:
+    get:
+      tags: ["8. Journey"]
+      operationId: listEnrolments
+      summary: Enrolments, for a learning provider or a practitioner
+      parameters:
+        - { name: providerId, in: query, schema: { type: string } }
+        - { name: practitionerId, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [requested, enrolled, declined, withdrawn] } }
+        - { name: transactionId, in: query, schema: { type: string } }
+      responses:
+        '200': { description: '{ count, enrolments } (id, offeringId, providerId, practitionerId, title, capabilities, status, sharedContext while requested or enrolled)' }
+
+  /v1/learning/enrolment-decision:
+    post:
+      tags: ["8. Journey"]
+      operationId: decideEnrolment
+      summary: The learning provider accepts or declines
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [enrolmentId], properties: { enrolmentId: { type: string }, decision: { type: string, enum: [accept, decline] }, providerId: { type: string }, note: { type: string } } }
+      responses:
+        '200': { description: '{ enrolmentId, status: enrolled | declined }' }
+        '404': { description: unknown_enrolment }
+        '409': { description: 'not_your_enrolment or not_requested' }
+
+  /v1/capabilities:
+    get:
+      tags: ["8. Journey"]
+      operationId: getCapabilityProfile
+      summary: Her capability profile (UC3 steps 1 and 8)
+      description: |
+        Built from her progress and enrolments, per capability: `status`
+        (`demonstrated` once a credential is earned; `needs_support` when the
+        latest event asks for support; `developing` after modules, assessments,
+        observations or evidence; otherwise `in_progress`), the supporting
+        Thabos, `credentials` and `evidence` (with `evidenceRef` other providers
+        can reference), enrolments and the last event.
+      parameters: [ { name: practitionerId, in: query, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: '{ practitionerId, count, capabilities }' }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+
   /v1/provider/register:
     post:
       tags: ["7. Complete"]

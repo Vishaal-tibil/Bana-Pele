@@ -128,11 +128,17 @@ function trigger(action, message, txId, opts = {}) {
           urgency: message.urgency,
           roles: message.roles,
           excludeThaboRefs: message.excludeThaboRefs,
+          type: message.type,
+          capability: message.capability,
+          maxCost: message.maxCost,
+          digitalAccess: message.digitalAccess,
         }),
       },
     };
   } else if (STATUS_FOR_ACTION[action]) {
-    outgoingMessage = { contract: buildContract(message.needId, message.providerId, STATUS_FOR_ACTION[action], ['select', 'init'].includes(action) ? message.sharedContext : undefined) };
+    // Shared context goes with select/init, and with an enrolment's confirm (UC3).
+    const carries = ['select', 'init'].includes(action) || (action === 'confirm' && String(message.needId || '').startsWith('enrol:'));
+    outgoingMessage = { contract: buildContract(message.needId, message.providerId, STATUS_FOR_ACTION[action], carries ? message.sharedContext : undefined) };
   } else {
     outgoingMessage = message;
   }

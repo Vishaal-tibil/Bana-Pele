@@ -315,6 +315,11 @@ function handleAction(action, incoming) {
     // A search from a practitioner (or any search once a partner backend is
     // configured) goes through the /v1 path: partner match lookup, per-search
     // record, "practitioner.matched" event.
+    // UC3: a search for learning offerings, not for a provider.
+    if (decoded.type === 'learning') {
+      v1.learning.handleDiscover(context, decoded).catch((e) => log.error('learning.discover_failed', { transactionId: context.transactionId, error: e.message, stack: e.stack }));
+      return;
+    }
     if (decoded.practitionerId || v1.delegated) {
       v1.handleDiscover(context, { ...decoded, needType, region }).catch((e) => log.error('discover.failed', { transactionId: context.transactionId, error: e.message, stack: e.stack }));
       return;
@@ -344,6 +349,13 @@ function handleAction(action, incoming) {
       },
     };
     sendCallback(callback);
+    return;
+  }
+
+  // UC3: an enrolment ("enrol:<offeringId>") is routed to the learning
+  // provider, not handled as a need (see v1-learning.js).
+  if (v1.learning.isEnrolment(message)) {
+    v1.learning.handleAction(action, context, message);
     return;
   }
 

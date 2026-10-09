@@ -153,6 +153,23 @@ UC3 (capability journey): Elevate's project-service pushes progress with
 Other participants subscribe to `progress.updated` through `/v1/subscriptions`;
 it is not echoed back to your events endpoint.
 
+The rest of UC3:
+- **Identity:** `POST /v1/identity/links { practitionerId, app, userId }` links an
+  Elevate user to her network id; then push progress with `user: { app, userId }`
+  instead of `practitionerId`.
+- **Learning discovery:** learning providers publish with `POST /v1/learning/offerings`;
+  `POST /v1/learning/search { practitionerId, capability, language, region, deliveryMode, maxCost, digitalAccess }`
+  finds them over the network (results in `GET /v1/results/{tx}`).
+- **Enrolment:** `POST /v1/learning/enrol { transactionId, offeringId, sharedContext }`
+  is routed to the provider, who sees it in `GET /v1/learning/enrolments?providerId=`
+  (or subscribes to `enrolment.requested`) and answers with
+  `POST /v1/learning/enrolment-decision { enrolmentId, decision }`. Her side follows
+  it in `GET /v1/status/{tx}` (`enrolments`) and gets `enrolment.changed` events; an
+  accepted enrolment adds `enrolled` to her journey. `POST /v1/learning/withdraw` cancels.
+- **Capability profile:** `GET /v1/capabilities?practitionerId=`: per capability a status
+  (needs_support / in_progress / developing / demonstrated), supporting Thabos,
+  credentials and evidence (`evidenceRef`) other providers can reference.
+
 ### 2. `POST /network/events`
 
 I push events here. Answer with any 2xx code, quickly. Body:
