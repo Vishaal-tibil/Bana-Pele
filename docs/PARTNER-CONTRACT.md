@@ -89,10 +89,14 @@ call returns 200 with `idempotent: true`.
 
 ### 1. `GET /network/match`
 
-Query: `needType`, `region`, `practitionerId`, `tier`, `children`.
+Query: `needType`, `region`, `practitionerId`, `tier`, `children`, and for UC2
+`language`, `deliveryMode` (`in_person` / `remote` / `either`, a filter),
+`urgency` (`low` / `normal` / `high`, for ordering only), `roles` (repeated:
+`roles=ecd_coach&roles=social_worker`, taxonomy codes) and `excludeThaboRef`
+(repeated, `app:userId`: people she already works with).
 Tell me whether WeHelp matches this practitioner (area, tier, capability,
 number of children). Answer within 3 seconds; if you don't, I treat it as "no
-match".
+match". Return matches in the order to show (most suitable first).
 
 ```json
 { "matches": [ {
@@ -106,6 +110,30 @@ match".
 ```
 
 An empty list (`{ "matches": [] }`) means no match.
+
+For UC2 a match can be an individual Thabo. These fields pass through to
+`/v1/results` unchanged (role and specialisation as taxonomy codes):
+
+```json
+{ "providerId": "thabo-zanele", "kind": "thabo", "name": "Zanele",
+  "thaboRef": { "app": "elevate", "userId": "mentor-123" },
+  "role": "nutrition_specialist", "specialisation": ["nutrition_planning"],
+  "affiliation": { "id": "provider-impande", "name": "Impande" },
+  "languages": ["en", "zu"], "verified": true, "deliveryModes": ["in_person", "remote"],
+  "availability": "available", "area": "Soweto", "regionsServed": ["Gauteng"],
+  "costOrFunding": "funded", "referralCapable": true,
+  "reasons": ["Speaks isiZulu", "Covers Gauteng"] }
+```
+
+`thaboRef` links to the person in their own app, so the front door can create
+the request and connection there.
+
+UC2 on the /v1 side: `POST /v1/select` takes `sharedContext` (only the selected
+Thabo sees it, in their commitments row; cleared on decline or withdraw). After
+a decline, select another Thabo on the same `transactionId`. A Thabo can
+redirect with `POST /v1/provider/refer { transactionId, referTo: { providerId, ... }, note }`:
+their request is declined and the referred Thabo appears in her results
+(`referrals`, `referredBy`), with a `referral.received` event.
 
 ### 2. `POST /network/events`
 

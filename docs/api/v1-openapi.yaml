@@ -189,6 +189,13 @@ paths:
         Sends Beckn `select` then `init`. The status becomes `pending` until
         the provider decides. Repeating it for the same provider is
         safe (200, `idempotent: true`).
+
+        `sharedContext` (UC2) goes only to the provider selected here, appears
+        in their row of `GET /v1/commitments`, and is removed if they decline or
+        she withdraws. Only the field names are logged.
+
+        After a decline (or a referral), select another provider on the **same**
+        `transactionId`; there is no need to search again.
       requestBody:
         required: true
         content:
@@ -201,6 +208,7 @@ paths:
                 practitionerId: { type: string }
                 needType: { $ref: '#/components/schemas/NeedType' }
                 providerId: { type: string }
+                sharedContext: { type: object, additionalProperties: true, description: 'UC2: what Naledi allows this provider to see (max 4000 characters as JSON)', example: { elpRegistrationStatus: in progress, preferredContact: whatsapp } }
             example: { transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0, practitionerId: prac_naledi_mahlangu, needType: registration, providerId: provider-wehelp }
       responses:
         '202':
@@ -346,6 +354,42 @@ paths:
         '404': { $ref: '#/components/responses/NoPendingRequest' }
         '502': { $ref: '#/components/responses/NetworkOrProviderSideError' }
 
+  /v1/provider/refer:
+    post:
+      tags: ["5. Decide"]
+      operationId: referToThabo
+      summary: Redirect Naledi to another Thabo
+      description: |
+        The Thabo a request is waiting on redirects it (UC2 step 6): their own
+        request is declined, and the referred Thabo is added to Naledi's results
+        on the same transaction (`referrals` and `referredBy` in
+        `GET /v1/results`), with a `referral.received` event. She accepts the
+        referral by selecting that Thabo, or picks someone else.
+        `providerId` is needed only when several providers wait on the request.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transactionId, referTo]
+              properties:
+                transactionId: { type: string }
+                providerId: { type: string, description: The referring Thabo }
+                referTo: { allOf: [ { $ref: '#/components/schemas/ProviderResult' } ], description: 'providerId required; the profile is completed from the directory when known' }
+                note: { type: string, maxLength: 500 }
+            example: { transactionId: 34d36803-11dd-44b8-9091-c466f85d20f0, referTo: { providerId: thabo-kabelo, name: Kabelo, role: environmental_health_practitioner, thaboRef: { app: municipality, userId: k-77 } }, note: Hygiene requirements }
+      responses:
+        '200':
+          description: Referral sent
+          content:
+            application/json:
+              example: { referralId: ref-1a2b3c4d, status: sent, declined: thabo-zanele, referTo: { providerId: thabo-kabelo, name: Kabelo } }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: No request is waiting for this Thabo on that transaction }
+        '502': { $ref: '#/components/responses/NetworkRejected' }
+
   /v1/provider/register:
     post:
       tags: ["7. Complete"]
@@ -355,6 +399,12 @@ paths:
         Adds a new NGO or Thabo to the provider directory. It can be matched
         and searched against immediately -- no separate step needed. Each
         `needType` must be one of the values listed above.
+
+        An individual Thabo (UC2) can also send the profile fields of
+        `ProviderResult` (`kind: thabo`, `thaboRef`, `role`, `specialisation`,
+        `affiliation`, `languages`, `verified`, `deliveryModes`, `availability`,
+        `area`, `regionsServed`, `costOrFunding`, `referralCapable`). Local
+        matching uses `languages`, `deliveryModes`, `role` and `thaboRef`.
       requestBody:
         required: true
         content:
@@ -699,15 +749,44 @@ components:
         children: { type: integer, example: 28 }
         title: { type: string, maxLength: 200, example: Register my ECD, description: Shown in the shared view }
         description: { type: string, maxLength: 2000, example: Help submitting DSD registration documents, description: Shown in the shared view; travels to the provider side }
+        language: { type: string, example: zu, description: "UC2: preferred language, passed to matching" }
+        deliveryMode: { type: string, enum: [in_person, remote, either], description: "UC2: a filter for matching" }
+        urgency: { type: string, enum: [low, normal, high], description: "UC2: used for ordering, not as a filter" }
+        roles: { type: array, maxItems: 10, items: { type: string, pattern: '^[a-z][a-z0-9_]{1,63}$' }, example: [social_worker, ecd_coach], description: "UC2: kinds of Thabo her need calls for, as taxonomy role codes" }
+        excludeThaboRefs: { type: array, maxItems: 50, items: { $ref: '#/components/schemas/ThaboRef' }, description: "UC2: people she already works with" }
+    ThaboRef:
+      type: object
+      required: [app, userId]
+      description: The person in their own application, so the front door can create the request and connection there.
+      properties:
+        app: { type: string, example: elevate }
+        userId: { type: string, example: mentor-123 }
     ProviderResult:
       type: object
+      description: |
+        A match, in the order the matcher gave (most suitable first). An
+        individual Thabo (UC2) also carries a profile. Role and specialisation
+        use the agreed taxonomy codes.
       properties:
         providerId: { type: string }
         name: { type: string }
-        kind: { type: string, enum: [NGO, Thabo] }
+        kind: { type: string, example: thabo, description: "NGO for an organisation, thabo for an individual" }
         description: { type: string }
         region: { type: string }
         reasons: { type: array, items: { type: string } }
+        thaboRef: { $ref: '#/components/schemas/ThaboRef' }
+        role: { type: string, example: nutrition_specialist }
+        specialisation: { type: array, items: { type: string }, example: [nutrition_planning] }
+        affiliation: { type: object, properties: { id: { type: string }, name: { type: string } } }
+        languages: { type: array, items: { type: string }, example: [en, zu] }
+        verified: { type: boolean }
+        deliveryModes: { type: array, items: { type: string, enum: [in_person, remote] } }
+        availability: { type: string, example: available }
+        area: { type: string, example: Soweto }
+        regionsServed: { type: array, items: { type: string } }
+        costOrFunding: { type: string, example: funded }
+        referralCapable: { type: boolean }
+        referredBy: { type: string, description: Set when another Thabo referred her to this one }
     Offer:
       type: object
       properties:

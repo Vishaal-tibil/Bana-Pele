@@ -215,6 +215,26 @@ module.exports = function createV1Bpp(k) {
   const EVENTS_URL = process.env.EVENTS_URL || '';
   const EVENTS_API_KEY = process.env.EVENTS_API_KEY || API_KEY;
   const MATCH_TIMEOUT_MS = Number(process.env.MATCH_TIMEOUT_MS || 3000);
+
+  // UC2: a match may be an individual Thabo with a profile. These fields
+  // travel to the practitioner side unchanged, in the order the matcher gave.
+  const PROFILE_FIELDS = ['name', 'kind', 'description', 'region', 'reasons', 'thaboRef', 'role', 'specialisation', 'affiliation', 'languages', 'verified',
+    'deliveryModes', 'availability', 'area', 'regionsServed', 'costOrFunding', 'referralCapable'];
+  const refKey = (r) => (r && r.app != null && r.userId != null ? `${r.app}:${r.userId}` : null);
+  const profileOf = (m) => Object.fromEntries(PROFILE_FIELDS.filter((f) => m[f] !== undefined).map((f) => [f, m[f]]));
+
+  // Local matching (no partner configured) also honours language and
+  // delivery mode, for providers that list them.
+  const speaks = (p, lang) => !lang || !Array.isArray(p.languages) || !p.languages.length || p.languages.map((l) => String(l).toLowerCase()).includes(String(lang).toLowerCase());
+  const offersMode = (p, mode) => !mode || mode === 'either' || !Array.isArray(p.deliveryModes) || !p.deliveryModes.length || p.deliveryModes.includes(mode);
+
+  // What Naledi allowed the chosen Thabo to see, sent with select/init in the
+  // contract's descriptor (see frontdoor-bap-server.js).
+  function sharedContextOf(message) {
+    const d = ((message || {}).contract || {}).descriptor || {};
+    if (d.name !== 'shared-context' || !d.longDesc) return null;
+    try { const c = JSON.parse(d.longDesc); return c && typeof c === 'object' && !Array.isArray(c) ? c : null; } catch (e) { return null; }
+  }
   // An offer is a later, second answer on the practitioner's search. 'new'
   // (default) gives it a fresh message id; 'reuse' repeats the original
   // discover's id (also accepted, but the adapters log a duplicate-id warning).
@@ -350,6 +370,8 @@ module.exports = function createV1Bpp(k) {
         title: (n.request && n.request.title) || null,
         description: (n.request && n.request.description) || null,
         completedAt: n.completedAt || null,
+        // Naledi's permitted context, for the provider she chose (UC2).
+        sharedContext: n.sharedContext ? { providerId: n.sharedContext.providerId, sharedAt: n.sharedContext.sharedAt, context: n.sharedContext.context } : null,
         history: n.history || [],
         awaitingDecision: waiting ? { stage: waiting.action === 'confirm' ? 'confirm' : 'select_init', providerId: waiting.providerId, transactionId: waiting.context && waiting.context.transactionId } : null,
       };
@@ -388,6 +410,7 @@ module.exports = function createV1Bpp(k) {
     need.coachId = null;
     need.transactionId = null;
     need.completedAt = null;
+    delete need.sharedContext;
     log.info('need.reopened', { needId, practitionerId: need.naledisId, needType: need.type });
     persist();
     return need;
@@ -403,6 +426,11 @@ module.exports = function createV1Bpp(k) {
         if (need.status === 'withdrawn') need.status = 'open'; // asked again after withdrawing
         need.createdAt = need.createdAt || meta.createdAt || nowIso();
         need.request = { transactionId: txId, title: meta.title || null, description: meta.description || null, requestedAt: meta.createdAt || nowIso() };
+        // Shared with this provider only; replaced when another is asked, cleared
+        // when the request is declined, withdrawn or the need reopens.
+        const ctx = sharedContextOf(pending.message);
+        if (ctx) need.sharedContext = { providerId: pending.providerId, sharedAt: nowIso(), context: ctx };
+        else delete need.sharedContext;
         track(need, 'requested', { providerId: pending.providerId, transactionId: txId });
       } else {
         track(need, 'confirm_requested', { providerId: pending.providerId, transactionId: txId });
@@ -415,6 +443,7 @@ module.exports = function createV1Bpp(k) {
       status: 'awaiting_decision',
       payload: {
         stage: pending.action === 'confirm' ? 'confirm' : 'select_init', needId: pending.needId, needType: need.type,
+        ...(need.sharedContext && need.sharedContext.providerId === pending.providerId ? { sharedContext: need.sharedContext.context } : {}),
         region: (S.txMeta[pending.context && pending.context.transactionId] || {}).region || (k.naledis.get(need.naledisId) || {}).region || null,
       },
     });
@@ -436,7 +465,14 @@ module.exports = function createV1Bpp(k) {
           practitionerId: decoded.practitionerId || '',
           tier: decoded.tier || '',
           children: decoded.children == null ? '' : String(decoded.children),
+          language: decoded.language || '',
+          deliveryMode: decoded.deliveryMode || '',
+          urgency: decoded.urgency || '',
         });
+        // Repeated parameters: roles=ecd_coach&roles=social_worker,
+        // excludeThaboRef=elevate:123 (app:userId).
+        for (const r of decoded.roles || []) q.append('roles', r);
+        for (const r of decoded.excludeThaboRefs || []) if (refKey(r)) q.append('excludeThaboRef', refKey(r));
         const res = await fetchTimeout(
           `${MATCH_URL}${MATCH_URL.includes('?') ? '&' : '?'}${q}`,
           { headers: { 'X-Api-Key': EVENTS_API_KEY } },
@@ -452,10 +488,13 @@ module.exports = function createV1Bpp(k) {
     } else {
       matches = k
         .providersMatching(decoded.needType, decoded.region)
-        .map((p) => ({ providerId: p.id, name: p.name, kind: p.kind, description: p.description, region: p.region, reasons: ['local match'] }));
+        .filter((p) => speaks(p, decoded.language) && offersMode(p, decoded.deliveryMode))
+        .filter((p) => !(decoded.roles || []).length || !p.role || decoded.roles.includes(p.role))
+        .filter((p) => !p.thaboRef || !(decoded.excludeThaboRefs || []).some((r) => refKey(r) === refKey(p.thaboRef)))
+        .map((p) => ({ ...profileOf(p), providerId: p.id, reasons: ['local match'] }));
     }
 
-    log.info('match.result', { transactionId: tx, needType: decoded.needType, region: decoded.region, source: MATCH_URL ? 'partner' : 'local', providerIds: matches.map((m) => m.providerId), error: matchError || undefined });
+    log.info('match.result', { transactionId: tx, needType: decoded.needType, region: decoded.region, language: decoded.language, deliveryMode: decoded.deliveryMode, urgency: decoded.urgency, source: MATCH_URL ? 'partner' : 'local', providerIds: matches.map((m) => m.providerId), error: matchError || undefined });
     S.txMeta[tx] = {
       practitionerId: decoded.practitionerId || null,
       needType: decoded.needType || null,
@@ -467,6 +506,11 @@ module.exports = function createV1Bpp(k) {
       createdAt: nowIso(),
       title: decoded.title ? String(decoded.title).slice(0, 200) : undefined,
       description: decoded.description ? String(decoded.description).slice(0, 2000) : undefined,
+      language: decoded.language || undefined,
+      deliveryMode: decoded.deliveryMode || undefined,
+      urgency: decoded.urgency || undefined,
+      roles: decoded.roles || undefined,
+      matches: matches.map((m) => ({ ...profileOf(m), providerId: m.providerId })), // for referral checks
     };
     persist();
 
@@ -481,7 +525,7 @@ module.exports = function createV1Bpp(k) {
             resources: matches.map((m) => ({
               id: m.providerId,
               descriptor: {
-                name: JSON.stringify({ name: m.name, kind: m.kind || 'NGO', description: m.description, region: m.region, reasons: m.reasons }),
+                name: JSON.stringify({ ...profileOf(m), kind: m.kind || 'NGO' }),
               },
             })),
           },
@@ -495,7 +539,7 @@ module.exports = function createV1Bpp(k) {
         practitionerId: decoded.practitionerId,
         providerId: m.providerId,
         status: 'matched',
-        payload: { needType: decoded.needType, region: decoded.region, tier: decoded.tier, children: decoded.children, reasons: m.reasons || [] },
+        payload: { needType: decoded.needType, region: decoded.region, tier: decoded.tier, children: decoded.children, language: decoded.language, deliveryMode: decoded.deliveryMode, urgency: decoded.urgency, reasons: m.reasons || [] },
       })
     );
   }
@@ -676,6 +720,46 @@ module.exports = function createV1Bpp(k) {
       return send(res, 200, { offerId, status: 'sent' });
     }
 
+    // A Thabo redirects Naledi to another Thabo (UC2 step 6): their own
+    // request is declined, and the referred Thabo is sent to her results on the
+    // same transaction, where she can select them (or anyone else) again.
+    if (path === '/internal/refer') {
+      const to = b.referTo && typeof b.referTo === 'object' ? b.referTo : null;
+      if (!b.transactionId || !to || !to.providerId) {
+        return send(res, 400, { error: 'invalid_request', message: 'transactionId and referTo.providerId are required' });
+      }
+      const p = findPending(b.transactionId, 'init', b.providerId ? String(b.providerId) : undefined);
+      if (!p) return send(res, 404, { error: 'no_pending_request', message: 'a referral redirects a request that is waiting for this Thabo' });
+      if (String(to.providerId) === p.providerId) return send(res, 400, { error: 'invalid_request', message: 'a Thabo cannot refer to themselves' });
+      const meta = S.txMeta[b.transactionId];
+      if (!meta || !meta.discoverContext) return send(res, 404, { error: 'unknown_transaction' });
+      // The referred Thabo: as the referrer describes them, completed from the
+      // directory or the original results when they are known there.
+      const known = k.providers.get(String(to.providerId)) || (meta.matches || []).find((m) => m.providerId === String(to.providerId)) || {};
+      const referTo = { ...profileOf(known), ...profileOf(to), providerId: String(to.providerId) };
+      const referralId = `ref-${uuid().slice(0, 8)}`;
+      k.resolvePending(p.id, false); // the referring Thabo steps back
+      const need = k.needs.get(p.needId);
+      if (need) track(need, 'referred', { providerId: p.providerId, transactionId: b.transactionId, toProviderId: referTo.providerId });
+      const context = { ...meta.discoverContext, action: 'on_discover', timestamp: nowIso() };
+      if (OFFER_MESSAGE_ID === 'new') context.messageId = uuid();
+      const r = await k.sendCallback({
+        context,
+        message: {
+          catalogs: [{
+            id: 'catalog-referrals',
+            descriptor: { name: 'Referrals' },
+            provider: { id: 'backbone', descriptor: { name: 'Digital Backbone' } },
+            resources: [{ id: referralId, descriptor: { name: JSON.stringify({ type: 'referral', referralId, fromProviderId: p.providerId, referTo, note: b.note ? String(b.note).slice(0, 500) : undefined }) } }],
+          }],
+        },
+      });
+      persist();
+      log.info('referral.sent', { transactionId: b.transactionId, referralId, fromProviderId: p.providerId, toProviderId: referTo.providerId, delivered: r.ok });
+      if (!r.ok) return send(res, 502, { error: 'network_rejected', referralId, detail: (r.text || r.error || '').slice(0, 500) });
+      return send(res, 200, { referralId, status: 'sent', declined: p.providerId, referTo });
+    }
+
     if (path === '/internal/register') {
       if (!b.name || typeof b.name !== 'string') {
         return send(res, 400, { error: 'invalid_request', message: 'name is required' });
@@ -700,6 +784,21 @@ module.exports = function createV1Bpp(k) {
         coverage: Array.isArray(b.coverage) ? b.coverage : [],
         capacity: b.capacity || 'Open',
         description: typeof b.description === 'string' ? b.description : '',
+        // Optional individual-Thabo profile (UC2), used by local matching and shown in results.
+        ...profileOf({
+          role: typeof b.role === 'string' ? b.role : undefined,
+          specialisation: Array.isArray(b.specialisation) ? b.specialisation.map(String) : undefined,
+          affiliation: b.affiliation && typeof b.affiliation === 'object' ? { id: b.affiliation.id || null, name: b.affiliation.name || null } : undefined,
+          languages: Array.isArray(b.languages) ? b.languages.map(String) : undefined,
+          verified: typeof b.verified === 'boolean' ? b.verified : undefined,
+          deliveryModes: Array.isArray(b.deliveryModes) ? b.deliveryModes.filter((m) => ['in_person', 'remote'].includes(m)) : undefined,
+          availability: typeof b.availability === 'string' ? b.availability : undefined,
+          thaboRef: b.thaboRef && typeof b.thaboRef === 'object' && b.thaboRef.app && b.thaboRef.userId != null ? { app: String(b.thaboRef.app), userId: String(b.thaboRef.userId) } : undefined,
+          area: typeof b.area === 'string' ? b.area : undefined,
+          regionsServed: Array.isArray(b.regionsServed) ? b.regionsServed.map(String) : undefined,
+          costOrFunding: typeof b.costOrFunding === 'string' ? b.costOrFunding : undefined,
+          referralCapable: typeof b.referralCapable === 'boolean' ? b.referralCapable : undefined,
+        }),
       };
       k.providers.set(providerId, provider);
       log.info('provider.registered', { providerId, name: provider.name, needTypesCovered: provider.needTypesCovered, region: provider.region });
@@ -720,6 +819,7 @@ module.exports = function createV1Bpp(k) {
       ? (need.status === 'fulfilled' ? 'fulfilled' : 'completion_declined')
       : (need.status === 'reserved' ? 'accepted' : 'declined');
     if (event === 'fulfilled') need.completedAt = nowIso();
+    if (event === 'declined') delete need.sharedContext; // the provider said no: it keeps nothing
     track(need, event, { providerId: pending.providerId, transactionId: txId, ...(event === 'accepted' && need.coachId ? { coachId: need.coachId } : {}) });
     if (need.status === before) return;
     const naledi = k.naledis.get(need.naledisId) || {};
@@ -737,6 +837,7 @@ module.exports = function createV1Bpp(k) {
   // The practitioner withdrew the request (Beckn cancel); the backbone has
   // already dropped any waiting request and released the need.
   function onWithdrawn(need, before, providerId, txId) {
+    delete need.sharedContext;
     track(need, 'withdrawn', { providerId: providerId || null, transactionId: txId });
     notifySubscribers({
       event: 'status.changed',
