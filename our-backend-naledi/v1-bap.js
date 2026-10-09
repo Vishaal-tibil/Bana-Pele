@@ -172,14 +172,29 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
     return trigger('status', { needId: tx.order.needId, providerId: tx.order.providerId }, tx.transactionId);
   }
 
+  // UC3: ask the learning provider where enrolments stand that are still
+  // waiting on it (requested, withdrawing), e.g. after a missed on_status.
+  async function checkEnrolments(tx, why) {
+    lastChecked.set(tx.transactionId, Date.now());
+    let last = { ok: true };
+    for (const e of (tx.enrolments || []).filter((x) => ['requested', 'enrolled', 'withdrawing'].includes(x.status) && (why !== 'sweep' || x.status !== 'enrolled'))) {
+      note(tx, 'status check sent', { why, offeringId: e.offeringId });
+      const r = await trigger('status', { needId: `enrol:${e.offeringId}`, providerId: e.providerId }, tx.transactionId);
+      if (!r.ok) last = r;
+    }
+    return last;
+  }
+
   async function sweep() {
     const now = Date.now();
     const due = Object.values(S.transactions).filter(
-      (tx) => WAITING.includes(tx.order.status) && tx.order.needId && tx.order.providerId &&
+      (tx) => (tx.kind === 'learning'
+        ? (tx.enrolments || []).some((e) => ['requested', 'withdrawing'].includes(e.status))
+        : WAITING.includes(tx.order.status) && tx.order.needId && tx.order.providerId) &&
         now - (lastChecked.get(tx.transactionId) || 0) >= STATUS_RECHECK_MS
     );
     for (const tx of due) {
-      const r = await checkStatus(tx, 'sweep');
+      const r = tx.kind === 'learning' ? await checkEnrolments(tx, 'sweep') : await checkStatus(tx, 'sweep');
       if (!r.ok) log.warn('status.check_failed', { transactionId: tx.transactionId, detail: (r.text || r.error || '').slice(0, 300) });
     }
     if (due.length) log.info('status.sweep', { checked: due.length });
@@ -584,12 +599,10 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
       const tx = S.transactions[txId];
       if (!tx) return send(res, 404, { error: 'unknown_transaction' });
       if (tx.kind === 'learning') {
-        const open = (tx.enrolments || []).filter((e) => ['requested', 'enrolled', 'withdrawing'].includes(e.status));
-        if (!open.length) return send(res, 409, { error: 'nothing_to_check', message: 'no enrolment has been requested yet' });
-        for (const e of open) {
-          note(tx, 'status check sent', { why: 'requested', offeringId: e.offeringId });
-          await trigger('status', { needId: `enrol:${e.offeringId}`, providerId: e.providerId }, tx.transactionId);
+        if (!(tx.enrolments || []).some((e) => ['requested', 'enrolled', 'withdrawing'].includes(e.status))) {
+          return send(res, 409, { error: 'nothing_to_check', message: 'no enrolment has been requested yet' });
         }
+        await checkEnrolments(tx, 'requested');
         return send(res, 202, { transactionId: tx.transactionId, enrolments: tx.enrolments, checking: true });
       }
       if (!tx.order.needId || !tx.order.providerId) {

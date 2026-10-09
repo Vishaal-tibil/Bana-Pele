@@ -47,7 +47,8 @@ async function learnSearch(b) {
   return { s, tx: s.body.transactionId, results: (r && r.results) || [] };
 }
 const enrolmentOf = async (tx, offeringId) => ((await api('GET', `/v1/status/${tx}`)).body.enrolments || []).find((e) => e.offeringId === offeringId);
-const ids = (rs) => rs.map((r) => r.offeringId).sort().join();
+// Only this run's own offerings: real ones (and those without a region) can match too.
+const ids = (rs) => rs.filter((r) => r.providerId === LP).map((r) => r.offeringId).sort().join();
 
 (async () => {
   section('1. identity links (Elevate user <-> practitioner)');
@@ -81,7 +82,7 @@ const ids = (rs) => rs.map((r) => r.offeringId).sort().join();
   check('capability that is not a code -> 400', (await api('POST', '/v1/learning/search', { practitionerId: P, capability: 'Nutrition Planning' })).status === 400);
   check('bad maxCost -> 400', (await api('POST', '/v1/learning/search', { practitionerId: P, capability: 'nutrition_planning', maxCost: -5 })).status === 400);
   const all = await learnSearch({ capability: 'nutrition_planning' });
-  check('capability gap -> both nutrition offerings, not hygiene', ids(all.results) === [A.offeringId, B.offeringId].sort().join(), all.results.map((r) => r.title));
+  check('capability gap -> both nutrition offerings, not hygiene', ids(all.results) === [A.offeringId, B.offeringId].sort().join(), all.results.filter((r) => r.providerId === LP).map((r) => r.title));
   const r0 = all.results.find((r) => r.offeringId === A.offeringId) || {};
   check('offering details come through', r0.providerId === LP && r0.duration === '4 weeks' && r0.cost && r0.cost.amount === 0 && r0.entryRequirements === 'None', r0);
   check('language zu -> online course only', ids((await learnSearch({ capability: 'nutrition_planning', language: 'zu' })).results) === A.offeringId);

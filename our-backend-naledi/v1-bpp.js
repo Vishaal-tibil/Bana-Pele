@@ -202,7 +202,14 @@ function bppDb(pool, log) {
         tx_meta: Object.entries(S.txMeta).map(([tx, m]) => ({
           transaction_id: tx, practitioner_id: m.practitionerId, need_type: m.needType, region: m.region, provider_ids: m.providerIds || [],
           discover_context: m.discoverContext || null, match_error: m.matchError || null, offers: m.offers || [], created_at: m.createdAt,
-          request: m.title || m.description ? { title: m.title || null, description: m.description || null } : null,
+          // What was asked (title, description, UC2 preferences) and the matches,
+          // so referrals can still complete a profile after a restart.
+          request: m.title || m.description || m.language || m.deliveryMode || m.urgency || m.roles || m.matches
+            ? {
+              title: m.title || null, description: m.description || null, language: m.language || null, deliveryMode: m.deliveryMode || null,
+              urgency: m.urgency || null, roles: m.roles || null, matches: m.matches && m.matches.length ? m.matches : null,
+            }
+            : null,
         })),
         outbox: ob.toRows(S.outbox),
         subscriptions: Object.values(S.subscriptions || {}).map((x) => ({
@@ -244,7 +251,11 @@ function bppDb(pool, log) {
         S.txMeta[r.transaction_id] = {
           practitionerId: r.practitioner_id, needType: r.need_type, region: r.region, providerIds: r.provider_ids || [],
           discoverContext: r.discover_context, matchError: r.match_error, offers: r.offers || [], createdAt: iso(r.created_at),
-          ...(r.request ? { title: r.request.title || undefined, description: r.request.description || undefined } : {}),
+          ...(r.request ? {
+            title: r.request.title || undefined, description: r.request.description || undefined, language: r.request.language || undefined,
+            deliveryMode: r.request.deliveryMode || undefined, urgency: r.request.urgency || undefined, roles: r.request.roles || undefined,
+            matches: r.request.matches || undefined,
+          } : {}),
         };
       }
       S.outbox = ob.fromRows(rows.outbox);
