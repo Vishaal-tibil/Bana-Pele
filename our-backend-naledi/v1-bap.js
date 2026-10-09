@@ -20,6 +20,8 @@
 //   POST /v1/provider/contribution -> provider side (record support, actions, follow-ups, UC2)
 //   POST /v1/consent/revoke      Naledi takes back the context she shared (UC2)
 //   GET  /v1/commitments         who holds which need (per-Naledi shared view, UC1)
+//   POST /v1/progress            push a capability-journey event (UC3, e.g. Elevate project-service)
+//   GET  /v1/progress            a practitioner's journey (UC3)
 //   GET|POST /v1/subscriptions   NGO webhooks: new matches, requests, status changes (UC1)
 //   DELETE /v1/subscriptions/{id}
 //   POST /v1/admin/reset         wipe state (both sides) for a fresh rehearsal
@@ -256,6 +258,7 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
     // ---- shared view and NGO subscriptions live on the provider side; relayed as-is ----
     const relayPath =
       (req.method === 'GET' && path === '/v1/commitments') ||
+      (['GET', 'POST'].includes(req.method) && path === '/v1/progress') ||
       (['GET', 'POST'].includes(req.method) && path === '/v1/subscriptions') ||
       (req.method === 'DELETE' && /^\/v1\/subscriptions\/[^/]+$/.test(path));
     if (relayPath) {
