@@ -284,6 +284,12 @@ module.exports = function createV1Bpp(k) {
   const EVENTS_URL = process.env.EVENTS_URL || '';
   const EVENTS_API_KEY = process.env.EVENTS_API_KEY || API_KEY;
   const MATCH_TIMEOUT_MS = Number(process.env.MATCH_TIMEOUT_MS || 3000);
+  // Government as a network node (UC1: "A Coordinated Support Network Around Every Naledi") - the
+  // backbone resolves her authoritative government status, same as it resolves a match or a
+  // commitment; coordination-service asks us, not bana-pele-gov-service directly.
+  const GOV_MOCK_BASE_URL = process.env.GOV_MOCK_BASE_URL || '';
+  const GOV_MOCK_API_KEY = process.env.GOV_MOCK_API_KEY || '';
+  const GOV_MOCK_TIMEOUT_MS = Number(process.env.GOV_MOCK_TIMEOUT_MS || 5000);
 
   // UC2: a match may be an individual Thabo with a profile. These fields
   // travel to the practitioner side unchanged, in the order the matcher gave.
@@ -812,6 +818,29 @@ module.exports = function createV1Bpp(k) {
 
     // UC3 learning, enrolment, capability profile, identity links (v1-learning.js).
     if (await learning.route(req, res, path)) return;
+
+    // Government as a network node (UC1): resolve her authoritative status from bana-pele-gov-service.
+    // A stateless proxy, same as the outside learning catalogue above - we hold no copy of her record.
+    if (req.method === 'GET' && path === '/internal/government-status') {
+      const q = Object.fromEntries(new URL(req.url, 'http://x').searchParams);
+      if (!q.practitionerId) return send(res, 400, { error: 'invalid_request', message: 'practitionerId is required' });
+      if (!GOV_MOCK_BASE_URL || !GOV_MOCK_API_KEY) {
+        return send(res, 503, { error: 'not_configured', message: 'Government status is not connected yet.' });
+      }
+      try {
+        const r = await fetchTimeout(
+          `${GOV_MOCK_BASE_URL.replace(/\/+$/, '')}/government/status/${encodeURIComponent(q.practitionerId)}`,
+          { headers: { 'X-Api-Key': GOV_MOCK_API_KEY } },
+          GOV_MOCK_TIMEOUT_MS
+        );
+        const body = await r.json().catch(() => null);
+        if (!r.ok || !body) return send(res, 502, { error: 'government_unavailable', message: `gov-mock returned HTTP ${r.status}` });
+        return send(res, 200, body);
+      } catch (e) {
+        log.warn('government.lookup_failed', { practitionerId: q.practitionerId, error: e.message });
+        return send(res, 502, { error: 'government_unavailable', message: e.message });
+      }
+    }
 
     if (req.method === 'GET' && path === '/internal/progress') {
       const q = Object.fromEntries(new URL(req.url, 'http://x').searchParams);

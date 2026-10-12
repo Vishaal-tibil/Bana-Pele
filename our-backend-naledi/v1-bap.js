@@ -304,7 +304,7 @@ module.exports = function createV1Bap({ trigger, log, pool }) {
       (['GET', 'POST'].includes(req.method) && path === '/v1/progress') ||
       (['GET', 'POST'].includes(req.method) && ['/v1/learning/offerings', '/v1/identity/links'].includes(path)) ||
       (req.method === 'DELETE' && /^\/v1\/learning\/offerings\/[^/]+$/.test(path)) ||
-      (req.method === 'GET' && ['/v1/learning/enrolments', '/v1/capabilities'].includes(path)) ||
+      (req.method === 'GET' && ['/v1/learning/enrolments', '/v1/capabilities', '/v1/government-status'].includes(path)) ||
       (req.method === 'POST' && path === '/v1/learning/enrolment-decision') ||
       (['GET', 'POST'].includes(req.method) && path === '/v1/subscriptions') ||
       (req.method === 'DELETE' && /^\/v1\/subscriptions\/[^/]+$/.test(path));
