@@ -854,6 +854,30 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/UnknownTransaction' }
 
+  /v1/government-status:
+    get:
+      tags: ["Coordination"]
+      operationId: getGovernmentStatus
+      summary: Government's authoritative status for a practitioner (UC1)
+      description: |
+        Government as a network node: it publishes authoritative status, and
+        the backbone resolves it on request, the same way it resolves a
+        match or a commitment. A stateless live proxy to
+        `bana-pele-gov-service` on every call - we hold no copy of the
+        record. `200` with a default/empty-shaped record if nothing is
+        linked for this practitioner yet, not an error.
+      parameters: [ { name: practitionerId, in: query, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: 'The record as bana-pele-gov-service returns it, unmodified.' }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '502':
+          description: government_unavailable (bana-pele-gov-service is unreachable or answered with an error)
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '503':
+          description: not_configured (GOV_MOCK_BASE_URL/GOV_MOCK_API_KEY are not set on this deployment)
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
   /v1/commitments:
     get:
       tags: ["Coordination"]
