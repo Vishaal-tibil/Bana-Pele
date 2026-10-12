@@ -249,6 +249,37 @@ Query (all optional): `practitionerId`, `status`, `providerId`, `needType`, `coa
 - While a request waits for a provider, `awaitingDecision` is
   `{ stage, providerId, transactionId }` (`stage` is `select_init` or `confirm`).
 
+### `GET /v1/government-status` — Government as a network node
+
+Government is a participant on the backbone, the same way an NGO or a learning
+provider is: it publishes its own authoritative status, and the backbone
+resolves it on request rather than coordination-service calling it directly.
+We hold no copy of the record - this is a live, stateless proxy to
+`bana-pele-gov-service` on every call.
+
+Query: `practitionerId` (required).
+
+```json
+{
+  "elpId": "ELP-2024-00193", "practitionerId": "42",
+  "registrationStatus": "in_progress", "applicationStage": "DSD review",
+  "complianceRequirements": [], "upcomingVisit": { "type": "compliance", "date": "2026-11-03" },
+  "subsidyStatus": "none", "milestones": [], "responsibleAuthority": "City of Johannesburg DSD",
+  "references": [], "actionRequired": false, "actionNote": null,
+  "registrationRecord": null, "updatedAt": "2026-10-09T10:06:40Z"
+}
+```
+
+- `200` with a default/empty-shaped record if nothing is linked for this
+  practitioner yet - not an error, matching `bana-pele-gov-service`'s own
+  `GET /government/status/:practitionerId` convention.
+- `503 { "error": "not_configured" }` if `GOV_MOCK_BASE_URL`/`GOV_MOCK_API_KEY`
+  aren't set on this deployment - degrade, don't break the caller.
+- `502 { "error": "government_unavailable" }` if gov-mock is unreachable or
+  answers with a non-2xx status.
+- Field meanings: see `bana-pele-gov-service`'s own README. We don't validate
+  or reshape the record - whatever it returns is what you get.
+
 ### `/v1/subscriptions` — tell an NGO portal when something matches
 
 Any NGO portal (not only WeHelp) can register a webhook and get the events that
