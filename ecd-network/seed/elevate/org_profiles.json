@@ -1,0 +1,25 @@
+{
+  "source": "Elevate coordination-service, table org_profiles (migrations/003_org_profiles_seed.sql and 004, last commit dfd53b5, 6 Oct 2026). Replace with tools/import-elevate.js once the live export is available.",
+  "profiles": [
+    { "provider_id": "provider-wehelp", "name": "WeHelp", "contact_email": null,
+      "profile": { "about": { "name": "WeHelp", "description": "Registration guidance, DSD submission support and infrastructure help.", "base": "Alexandra" },
+                   "capabilities": [{ "area": "Registration" }, { "area": "Infrastructure" }],
+                   "coverage": { "communities": "Alexandra", "tiers": ["Pre-Bronze", "Bronze"] } } },
+    { "provider_id": "provider-impande", "name": "Impande", "contact_email": null,
+      "profile": { "about": { "name": "Impande", "description": "Registration and municipal-compliance assistance.", "base": "Gauteng" },
+                   "capabilities": [{ "area": "Registration" }],
+                   "coverage": { "communities": "Gauteng", "tiers": ["Pre-Bronze", "Bronze"] } } },
+    { "provider_id": "provider-grow", "name": "GROW", "contact_email": "zanele.n@example.com",
+      "profile": { "about": { "name": "GROW", "description": "Business-development and sustainability support.", "base": "Gauteng" },
+                   "capabilities": [{ "area": "Business / Financial Support" }],
+                   "coverage": { "communities": "Gauteng", "tiers": ["Pre-Bronze", "Bronze"] } } },
+    { "provider_id": "provider-smartstart", "name": "SmartStart", "contact_email": "karabo.m@example.com",
+      "profile": { "about": { "name": "SmartStart", "description": "Business and financial support for early learning programmes.", "base": "Gauteng" },
+                   "capabilities": [{ "area": "Business / Financial Support" }],
+                   "coverage": { "communities": "Gauteng", "tiers": ["Pre-Bronze", "Bronze"] } } },
+    { "provider_id": "provider-thabo-registration", "name": "Registration Guide Thabo", "contact_email": "thabo.k@example.com",
+      "profile": { "about": { "name": "Thabo K", "description": "Registration, compliance and municipal navigation.", "base": "Gauteng" },
+                   "capabilities": [{ "area": "Registration" }],
+                   "coverage": { "communities": "Gauteng", "tiers": ["Pre-Bronze", "Bronze"] } } }
+  ]
+}

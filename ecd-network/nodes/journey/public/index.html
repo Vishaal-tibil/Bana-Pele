@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Journey: get support</title>
+<link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+<header class="top"><div class="in">
+  <h1>My Journey</h1>
+  <span class="badge accent">Bana Pele ECD Network</span>
+  <span class="who" id="who"></span>
+</div></header>
+<main>
+  <section id="register" hidden>
+    <div class="card">
+      <h2 class="mt0">Register</h2>
+      <p class="muted">Your details stay on the Journey Platform. A provider sees only what you choose to share with it.</p>
+      <form id="reg-form" novalidate>
+        <label for="r-name">Your name</label><input id="r-name" name="name" required maxlength="80" autocomplete="name">
+        <label for="r-centre">Your centre's name</label><input id="r-centre" name="centre" maxlength="120">
+        <label for="r-region">Where your centre is</label><select id="r-region" name="region"></select>
+        <label for="r-phone">Phone number</label><input id="r-phone" name="phone" maxlength="30" inputmode="tel" autocomplete="tel">
+        <div class="row mt">
+          <button type="submit" class="primary">Register</button>
+          <button type="button" id="demo">Fill in demo practitioner</button>
+        </div>
+        <div class="error" id="reg-error" role="alert"></div>
+      </form>
+    </div>
+  </section>
+  <section id="home" hidden>
+    <div class="card">
+      <h2 class="mt0">Ask for support</h2>
+      <div class="row">
+        <div class="grow"><label for="need">What do you need help with?</label><select id="need"></select></div>
+        <button class="primary end" id="ask">Ask the network</button>
+      </div>
+      <div class="error" id="ask-error" role="alert"></div>
+    </div>
+    <h2>My requests</h2>
+    <div id="requests" aria-live="polite"></div>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

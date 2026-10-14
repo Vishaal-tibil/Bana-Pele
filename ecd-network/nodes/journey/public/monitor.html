@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ECD Network monitor</title>
+<link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+<header class="top"><div class="in">
+  <h1>ECD Network monitor</h1>
+  <span class="badge accent">Observability</span>
+  <span class="who" id="net"></span>
+</div></header>
+<main>
+  <h2 class="mt0">Members</h2>
+  <div id="members" aria-live="polite"></div>
+  <div class="row mt">
+    <h2 class="grow">Messages</h2>
+    <label class="check"><input type="checkbox" id="pause"> Pause</label>
+  </div>
+  <div class="row">
+    <div class="grow"><label for="tx">Show one request (transaction id)</label><input id="tx" placeholder="all requests" maxlength="64"></div>
+  </div>
+  <div id="messages" aria-live="polite"></div>
+</main>
+<script src="/monitor.js"></script>
+</body>
+</html>

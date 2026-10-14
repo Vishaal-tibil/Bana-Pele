@@ -1,0 +1,7 @@
+{
+  "id": "journey",
+  "subscriberId": "journey.ecd.bana-pele",
+  "role": "BAP",
+  "name": "Journey Platform",
+  "ports": { "app": 7100, "onix": 8100, "redis": 6400 }
+}

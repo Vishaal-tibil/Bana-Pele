@@ -1,0 +1,7 @@
+# Private keys, generated adapter configs (they contain private keys), app data, logs
+.keys/
+.generated/
+data/
+logs/
+node_modules/
+.run/

@@ -1,0 +1,6 @@
+{
+  "networkId": "bana-pele/ecd",
+  "version": "2.0.0",
+  "registryPort": 3030,
+  "registryCacheTTL": "60s"
+}

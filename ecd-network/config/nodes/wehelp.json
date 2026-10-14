@@ -1,0 +1,11 @@
+{
+  "id": "wehelp",
+  "subscriberId": "wehelp.ecd.bana-pele",
+  "role": "BPP",
+  "name": "WeHelp",
+  "ports": { "app": 7201, "onix": 8201, "redis": 6401 },
+  "provider": {
+    "elevateProviderId": "provider-wehelp",
+    "offer": { "title": "Registration support with a coach", "terms": "Free" }
+  }
+}

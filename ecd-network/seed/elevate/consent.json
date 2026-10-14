@@ -1,0 +1,9 @@
+{
+  "source": "Elevate consent-service (server.js categories). The network model asks Naledi per request which fields go to the provider she picks.",
+  "categories": ["personal_info", "ecd_info", "journey_goals", "skills"],
+  "shareableFields": [
+    { "field": "name", "category": "personal_info", "label": "My name" },
+    { "field": "phone", "category": "personal_info", "label": "My phone number" },
+    { "field": "centre", "category": "ecd_info", "label": "My centre's name" }
+  ]
+}

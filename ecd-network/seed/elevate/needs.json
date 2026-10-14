@@ -1,0 +1,21 @@
+{
+  "source": "Elevate coordination-service lib/network-kit.js NEED_AREAS (support area in an org profile -> need type on the network).",
+  "areas": {
+    "Registration": "registration",
+    "Infrastructure": "infrastructure",
+    "Learning & Skilling": "learning-skilling",
+    "Health & Safety": "health-safety",
+    "Nutrition": "nutrition",
+    "Child Development": "child-development",
+    "Business / Financial Support": "fundraising"
+  },
+  "labels": {
+    "registration": "Registration help",
+    "infrastructure": "Infrastructure help",
+    "learning-skilling": "Learning and skilling",
+    "health-safety": "Health and safety",
+    "nutrition": "Nutrition",
+    "child-development": "Child development",
+    "fundraising": "Business and financial support"
+  }
+}

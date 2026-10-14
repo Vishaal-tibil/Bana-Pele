@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provider dashboard</title>
+<link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+<header class="top"><div class="in">
+  <h1 id="title">Provider dashboard</h1>
+  <span class="badge accent">ECD Network node</span>
+  <span class="who" id="who"></span>
+</div></header>
+<main>
+  <section class="card" id="profile" aria-live="polite"></section>
+  <nav class="tabs" role="tablist" aria-label="Orders">
+    <button role="tab" data-tab="new" aria-selected="true">New <span id="n-new"></span></button>
+    <button role="tab" data-tab="progress" aria-selected="false">In progress <span id="n-progress"></span></button>
+    <button role="tab" data-tab="done" aria-selected="false">Done <span id="n-done"></span></button>
+    <button role="tab" data-tab="asked" aria-selected="false">Requests seen</button>
+    <button role="tab" data-tab="messages" aria-selected="false">Messages</button>
+  </nav>
+  <section id="view" aria-live="polite"></section>
+  <datalist id="coaches"></datalist>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

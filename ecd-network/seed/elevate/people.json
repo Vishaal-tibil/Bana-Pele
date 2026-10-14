@@ -1,0 +1,16 @@
+{
+  "source": "Elevate seed/seed-personas.js (demo personas). Public demo fields only: no passwords, tokens or ids, because Elevate's ids differ by environment.",
+  "practitioners": [
+    { "key": "naledi", "name": "Naledi M", "email": "naledi.m@example.com", "phone": "+27 821234567",
+      "languages": ["isiZulu", "English"], "region": "Bushbuckridge, Mpumalanga", "elpStatus": "unregistered home-based ELP" }
+  ],
+  "coaches": [
+    { "key": "thabo", "name": "Thabo K", "email": "thabo.k@example.com", "org": "GROW", "expertise": "registration_support", "region": "Bushbuckridge, Mpumalanga" },
+    { "key": "lerato", "name": "Lerato S", "email": "lerato.s@example.com", "org": "SmartStart", "expertise": "business_support" },
+    { "key": "sipho", "name": "Sipho D", "email": "sipho.d@example.com", "org": "Impande", "expertise": "infrastructure_safety" }
+  ],
+  "orgAdmins": [
+    { "key": "zanele", "name": "Zanele N", "email": "zanele.n@example.com", "org": "GROW" },
+    { "key": "karabo", "name": "Karabo M", "email": "karabo.m@example.com", "org": "SmartStart" }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "id": "grow",
+  "subscriberId": "grow.ecd.bana-pele",
+  "role": "BPP",
+  "name": "GROW",
+  "ports": { "app": 7202, "onix": 8202, "redis": 6402 },
+  "provider": {
+    "elevateProviderId": "provider-grow",
+    "offer": { "title": "Business and sustainability support", "terms": "Funded" }
+  }
+}
