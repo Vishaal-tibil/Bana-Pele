@@ -144,7 +144,12 @@ function runPart(file) {
     execFileSync(process.execPath, [path.join(ROOT, 'tools/new-node.js'), 'smartstart', '--elevate', 'provider-smartstart', '--offer', 'Business support for early learning programmes', '--terms', 'Free'], { stdio: 'ignore', env: process.env });
     if (DOCKER) {
       execFileSync('docker', [...COMPOSE, 'up', '-d', 'smartstart-app'], { stdio: 'ignore', env: process.env });
-      await until(async () => { try { return (await fetch(`http://127.0.0.1:${readNode('smartstart').ports.app}/health`)).ok; } catch { return false; } }, 60000);
+      // Wait for the app AND its ONIX adapter: the adapter loads the Beckn
+      // schema before it listens, so it is often a few seconds behind the app.
+      const sn = readNode('smartstart');
+      const answers = async (u) => { try { await fetch(u, { signal: AbortSignal.timeout(1000) }); return true; } catch { return false; } };
+      const ready = await until(async () => (await answers(`http://127.0.0.1:${sn.ports.app}/health`)) && (await answers(`http://127.0.0.1:${sn.ports.onix}/`)), 90000);
+      if (!ready) console.log('        (SmartStart did not come up in 90 s: docker compose -f .generated/docker-compose.yml logs onix-smartstart smartstart-app)');
     } else execFileSync('bash', [path.join(ROOT, 'start-node.sh'), 'smartstart'], { stdio: 'ignore', env: process.env });
     const st = readNode('smartstart');
     check('SmartStart is live in the registry', (await get(`http://127.0.0.1:${network.registryPort}/subscribers`)).subscribers.some((s) => s.subscriber_id === st.subscriberId));
@@ -152,7 +157,9 @@ function runPart(file) {
     await third.post('/api/naledis', { name: 'Lindiwe', region: 'Soweto, Gauteng' });
     const a3 = await third.post('/api/requests', { needType: 'fundraising' });
     const r3 = await until(async () => { const r = (await third.get('/api/requests')).json[0]; return r.answers.length >= 2 ? r : null; });
-    check('a fundraising request in Gauteng now gets GROW and SmartStart', r3 && r3.answers.map((a) => a.providerName).sort().join() === 'GROW,SmartStart', JSON.stringify(r3 && r3.answers.map((a) => a.providerName)));
+    const r3seen = r3 || (await third.get('/api/requests')).json[0];
+    check('a fundraising request in Gauteng now gets GROW and SmartStart', r3 && r3.answers.map((a) => a.providerName).sort().join() === 'GROW,SmartStart',
+      `answers ${JSON.stringify(r3seen && r3seen.answers.map((a) => a.providerName))}, asked ${JSON.stringify(r3seen && r3seen.asked.map((a) => `${a.providerId}:${a.ack}:${a.error || ''}`))}`);
     check('no other node\'s settings changed', ['journey', 'wehelp', 'grow'].every((id) => fs.readFileSync(path.join(ROOT, `config/nodes/${id}.json`), 'utf8') === before[id]));
     check('no other node was restarted', ['journey', 'wehelp', 'grow'].every((id, i) => startedAt(id) === pidsBefore[i]));
 
